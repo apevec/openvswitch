@@ -1,3 +1,7 @@
+%if 0%{?fedora}
+%global with_python3 1
+%endif
+
 # Uncomment these for snapshot releases:
 # snapshot is the date YYYYMMDD of the snapshot
 # snap_git is the 8 git sha digits of the last commit
@@ -33,7 +37,7 @@
 
 Name: openvswitch
 Version: 2.8.1
-Release: 1%{?snapshot}%{?dist}
+Release: 1.1fc28%{?snapshot}%{?dist}
 Summary: Open vSwitch daemon/database/utilities
 
 # Nearly all of openvswitch is ASL 2.0.  The bugtool is LGPLv2+, and the
@@ -81,12 +85,14 @@ BuildRequires: python-sphinx
 BuildRequires: autoconf automake libtool
 BuildRequires: systemd-units openssl openssl-devel
 BuildRequires: python2-devel python2-six
+%if 0%{?with_python3}
 BuildRequires: python3-devel python3-six
+%endif
 BuildRequires: desktop-file-utils
 BuildRequires: groff graphviz
 # make check dependencies
 %if %{with check}
-BuildRequires: python2-twisted python2-zope-interface
+BuildRequires: python2-twisted python-zope-interface
 BuildRequires: procps-ng
 %endif
 %if %{with dpdk}
@@ -130,6 +136,7 @@ Provides: python-openvswitch = %{version}-%{release}
 %description -n python2-openvswitch
 Python bindings for the Open vSwitch database
 
+%if 0%{?with_python3}
 %package -n python3-openvswitch
 Summary: Open vSwitch python3 bindings
 License: ASL 2.0
@@ -138,6 +145,7 @@ Requires: python3 python3-six
 
 %description -n python3-openvswitch
 Python bindings for the Open vSwitch database
+%endif
 
 %package test
 Summary: Open vSwitch testing utilities
@@ -375,11 +383,13 @@ install -p -m 0755 rhel/etc_sysconfig_network-scripts_ifup-ovs \
         $RPM_BUILD_ROOT/%{_sysconfdir}/sysconfig/network-scripts/ifup-ovs
 
 install -d -m 0755 $RPM_BUILD_ROOT%{python2_sitelib}
-install -d -m 0755 $RPM_BUILD_ROOT%{python3_sitelib}
 cp -a $RPM_BUILD_ROOT/%{_datadir}/openvswitch/python/* \
    $RPM_BUILD_ROOT%{python2_sitelib}
+%if 0%{?with_python3}
+install -d -m 0755 $RPM_BUILD_ROOT%{python3_sitelib}
 cp -a $RPM_BUILD_ROOT/%{_datadir}/openvswitch/python/ovs \
    $RPM_BUILD_ROOT%{python3_sitelib}
+%endif
 rm -rf $RPM_BUILD_ROOT/%{_datadir}/openvswitch/python/
 
 install -d -m 0755 $RPM_BUILD_ROOT/%{_sharedstatedir}/openvswitch
@@ -567,9 +577,11 @@ fi
 %{python2_sitelib}/ovs
 %doc COPYING
 
+%if 0%{?with_python3}
 %files -n python3-openvswitch
 %{python3_sitelib}/ovs
 %doc COPYING
+%endif
 
 %files test
 %{_bindir}/ovs-test
