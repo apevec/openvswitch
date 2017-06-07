@@ -42,6 +42,8 @@ Name: openvswitch
 Summary: Open vSwitch
 Group: System Environment/Daemons daemon/database/utilities
 URL: http://www.openvswitch.org/
+# Carried over from 2.6.1 CBS builds, introduced to win over 2.6.90
+Epoch:   1
 Version: 2.9.0
 Release: 56%{?commit0:.%{date}git%{shortcommit0}}%{?dist}
 
@@ -371,7 +373,7 @@ Python bindings for the Open vSwitch database
 Summary: Open vSwitch testing utilities
 License: ASL 2.0
 BuildArch: noarch
-Requires: python-openvswitch = %{version}-%{release}
+Requires: python-openvswitch = %{epoch}:%{version}-%{release}
 Requires: python python-twisted-core python-twisted-web
 
 %description test
@@ -381,7 +383,7 @@ issues in Open vSwitch setup.
 %package devel
 Summary: Open vSwitch OpenFlow development package (library, headers)
 License: ASL 2.0
-Provides: openvswitch-static = %{version}-%{release}
+Provides: openvswitch-static = %{epoch}:%{version}-%{release}
 
 %description devel
 This provides static library, libopenswitch.a and the openvswitch header
