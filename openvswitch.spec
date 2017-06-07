@@ -36,6 +36,8 @@
 %define dpdksver %(echo %{dpdkver} | cut -d. -f-2)
 
 Name: openvswitch
+# Carried over from 2.6.1 CBS builds, introduced to win over 2.6.90
+Epoch:   1
 Version: 2.8.1
 Release: 1.1fc28%{?snapshot}%{?dist}
 Summary: Open vSwitch daemon/database/utilities
@@ -130,8 +132,8 @@ Summary: Open vSwitch python2 bindings
 License: ASL 2.0
 BuildArch: noarch
 Requires: python2 python2-six
-Obsoletes: python-openvswitch < 2.6.1-2
-Provides: python-openvswitch = %{version}-%{release}
+Obsoletes: python-openvswitch < %{epoch}:2.7.2
+Provides: python-openvswitch = %{epoch}:%{version}-%{release}
 
 %description -n python2-openvswitch
 Python bindings for the Open vSwitch database
@@ -151,7 +153,7 @@ Python bindings for the Open vSwitch database
 Summary: Open vSwitch testing utilities
 License: ASL 2.0
 BuildArch: noarch
-Requires: python2-openvswitch = %{version}-%{release}
+Requires: python2-openvswitch = %{epoch}:%{version}-%{release}
 Requires: python2 python2-twisted
 
 %description test
@@ -161,7 +163,7 @@ issues in Open vSwitch setup.
 %package devel
 Summary: Open vSwitch OpenFlow development package (library, headers)
 License: ASL 2.0
-Provides: openvswitch-static = %{version}-%{release}
+Provides: openvswitch-static = %{epoch}:%{version}-%{release}
 
 %description devel
 This provides static library, libopenswitch.a and the openvswitch header
