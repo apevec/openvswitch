@@ -1,0 +1,32 @@
+From f70ad934920d25c5d392e18eca7d3fa1bc36c205 Mon Sep 17 00:00:00 2001
+Message-Id: <f70ad934920d25c5d392e18eca7d3fa1bc36c205.1500647421.git.tredaelli@redhat.com>
+From: Haifeng Lin <haifeng.lin@huawei.com>
+Date: Tue, 4 Jul 2017 08:52:57 +0800
+Subject: [PATCH] netdev: Fix crash when ifa_netmask is null.
+
+glibc sometimes doesn't initialize the ifa_netmask and ifa_addr fields, if
+the ioctl to fetch them fails.  Check ifa_name also just for paranoia.
+
+Signed-off-by: Haifeng Lin <haifeng.lin@huawei.com>
+Signed-off-by: Ben Pfaff <blp@ovn.org>
+---
+ lib/netdev.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/lib/netdev.c b/lib/netdev.c
+index 26e87a2ee..0d5fad573 100644
+--- a/lib/netdev.c
++++ b/lib/netdev.c
+@@ -1967,7 +1967,8 @@ netdev_get_addrs(const char dev[], struct in6_addr **paddr,
+     for (ifa = if_addr_list; ifa; ifa = ifa->ifa_next) {
+         int family;
+ 
+-        if (strncmp(ifa->ifa_name, dev, IFNAMSIZ) || ifa->ifa_addr == NULL) {
++        if (!ifa->ifa_name || !ifa->ifa_addr || !ifa->ifa_netmask
++            || strncmp(ifa->ifa_name, dev, IFNAMSIZ)) {
+             continue;
+         }
+ 
+-- 
+2.13.3
+

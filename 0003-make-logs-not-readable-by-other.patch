@@ -1,0 +1,87 @@
+From 55655f358cea2c7c79842563603fdbc19351243e Mon Sep 17 00:00:00 2001
+From: Timothy Redaelli <tredaelli@redhat.com>
+Date: Mon, 19 Jun 2017 16:50:21 +0200
+Subject: [PATCH 3/3] make logs not readable by other
+
+The Open vSwitch log directory and files are currently set world readable.
+
+However, since only Open vSwitch users and processes need to access this
+directory and these files there is no need to allow the world to access them,
+since it can result in the exposure of sensitive information.
+
+Signed-off-by: Timothy Redaelli <tredaelli@redhat.com>
+Signed-off-by: Ben Pfaff <blp@ovn.org>
+(cherry picked from commit 03736a6726cb1faf2584ad2536625471ab6d17c5)
+---
+ lib/vlog.c                      | 2 +-
+ rhel/openvswitch-fedora.spec.in | 2 +-
+ utilities/ovs-lib.in            | 5 +++--
+ utilities/ovs-pki.in            | 2 +-
+ 4 files changed, 6 insertions(+), 5 deletions(-)
+
+diff --git a/lib/vlog.c b/lib/vlog.c
+index 333337b10..2a60ca34a 100644
+--- a/lib/vlog.c
++++ b/lib/vlog.c
+@@ -360,7 +360,7 @@ vlog_set_log_file(const char *file_name)
+     new_log_file_name = (file_name
+                          ? xstrdup(file_name)
+                          : xasprintf("%s/%s.log", ovs_logdir(), program_name));
+-    new_log_fd = open(new_log_file_name, O_WRONLY | O_CREAT | O_APPEND, 0666);
++    new_log_fd = open(new_log_file_name, O_WRONLY | O_CREAT | O_APPEND, 0660);
+     if (new_log_fd < 0) {
+         VLOG_WARN("failed to open %s for logging: %s",
+                   new_log_file_name, ovs_strerror(errno));
+diff --git a/rhel/openvswitch-fedora.spec.in b/rhel/openvswitch-fedora.spec.in
+index ec4de510c..6ccba598e 100644
+--- a/rhel/openvswitch-fedora.spec.in
++++ b/rhel/openvswitch-fedora.spec.in
+@@ -196,7 +196,7 @@ rm -rf $RPM_BUILD_ROOT
+ make install DESTDIR=$RPM_BUILD_ROOT
+ 
+ install -d -m 0755 $RPM_BUILD_ROOT%{_rundir}/openvswitch
+-install -d -m 0755 $RPM_BUILD_ROOT%{_localstatedir}/log/openvswitch
++install -d -m 0750 $RPM_BUILD_ROOT%{_localstatedir}/log/openvswitch
+ install -d -m 0755 $RPM_BUILD_ROOT%{_sysconfdir}/openvswitch
+ 
+ install -p -D -m 0644 \
+diff --git a/utilities/ovs-lib.in b/utilities/ovs-lib.in
+index 4c0775053..94e878f32 100644
+--- a/utilities/ovs-lib.in
++++ b/utilities/ovs-lib.in
+@@ -150,8 +150,9 @@ version_geq() {
+ 
+ install_dir () {
+     DIR="$1"
++    INSTALL_MODE="${2:-755}"
+     if test ! -d "$DIR"; then
+-        install -d -m 755 -o root -g root "$DIR"
++        install -d -m "$INSTALL_MODE" -o root -g root "$DIR"
+         restorecon "$DIR" >/dev/null 2>&1
+     fi
+ }
+@@ -169,7 +170,7 @@ start_daemon () {
+     cd "$DAEMON_CWD"
+ 
+     # log file
+-    install_dir "$logdir"
++    install_dir "$logdir" "750"
+     set "$@" --log-file="$logdir/$daemon.log"
+ 
+     # pidfile and monitoring
+diff --git a/utilities/ovs-pki.in b/utilities/ovs-pki.in
+index 7a992a594..38dda2cd8 100755
+--- a/utilities/ovs-pki.in
++++ b/utilities/ovs-pki.in
+@@ -201,7 +201,7 @@ esac
+ 
+ logdir=$(dirname "$log")
+ if test ! -d "$logdir"; then
+-    mkdir -p -m755 "$logdir" 2>/dev/null || true
++    mkdir -p -m750 "$logdir" 2>/dev/null || true
+     if test ! -d "$logdir"; then
+         echo "$0: log directory $logdir does not exist and cannot be created" >&2
+         exit 1
+-- 
+2.13.3
+

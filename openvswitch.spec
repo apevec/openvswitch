@@ -41,7 +41,7 @@ Version: 2.6.1
 License: ASL 2.0 and LGPLv2+ and SISSL
 
 %define snapshot .git20161206
-%define rel 10%{?snapshot}
+%define rel 10.1%{?snapshot}
 
 #define snapver 10346.git97bab959
 %define srcname openvswitch
@@ -94,6 +94,24 @@ Patch43: ovn-northd-ipam-handle-the-static-MAC-updates-by-the-user.patch
 
 # Backport rhel ifup vhost client mode support BZ 1418957
 Patch44: 0001-rhel-ifup-support-vhost-user-client-mode.patch
+
+# Backport rhel-systemd: Restart openvswitch service if a daemon crashes BZ 1468334
+Patch50: rhel-systemd-Restart-openvswitch-service-if-a-daemon-crashes.patch
+
+# Backport fix for Avoid segfault for vswitchd BZ 1472334
+Patch55: 0001-mcast-snooping-Avoid-segfault-for-vswitchd.patch
+# Backport fix for Flush ports mdb when VLAN configuration changed BZ 1472335
+Patch56: 0001-mcast-snooping-Flush-ports-mdb-when-VLAN-configurati.patch
+
+# Backport fix to make logs not readable by other BZ 1431490
+Patch57: 0001-lib-automake.mk-don-t-install-runtime-directories.patch
+Patch58: 0002-rhel-fix-the-fedora-spec.patch
+Patch59: 0003-make-logs-not-readable-by-other.patch
+
+Patch60: 0001-rhel-systemd-start-vswitchd-after-udev.patch
+
+Patch61: 0001-netdev-Fix-crash-when-ifa_netmask-is-null.patch
+Patch62: ovs-dev-v3-netdev-check-for-NULL-fields-in-netdev_get_addrs.patch
 
 BuildRequires: autoconf automake libtool
 BuildRequires: systemd-units openssl openssl-devel
@@ -222,6 +240,15 @@ Docker network plugins for OVN.
 %patch42 -p1
 %patch43 -p1
 %patch44 -p1
+%patch50 -p1
+%patch55 -p1
+%patch56 -p1
+%patch57 -p1
+%patch58 -p1
+%patch59 -p1
+%patch60 -p1
+%patch61 -p1
+%patch62 -p1
 
 %build
 %if 0%{?snapshot:1}
@@ -651,6 +678,14 @@ exit 0
 %{_unitdir}/ovn-controller-vtep.service
 
 %changelog
+* Tue Aug 01 2017 Timothy Redaelli <tredaelli@redhat.com> - 2.6.1-10.1.git20161206
+- Backport patch to fix random crashes when adding/removing interfaces (#1473735)
+- Restart openvswitch service if a daemon crashes (#1468334)
+- Avoid segfault for vswitchd (#1472334)
+- Flush ports mdb when VLAN configuration changed (#1472335)
+- Make logs not readable by other (#1431490)
+- Fix ovs-vswitchd start order (#1468751)
+
 * Thu Feb 16 2017 Aaron Conole <aconole@redhat.com> - 2.6.1-10.git20161206
 - vhostuser client mode support for ifup/ifdown (#1418957)
 

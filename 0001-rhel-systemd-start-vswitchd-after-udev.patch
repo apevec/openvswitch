@@ -1,0 +1,37 @@
+From 2a951e8509fb13f7be41694c6bbb491b08c71220 Mon Sep 17 00:00:00 2001
+From: aaron conole <aconole@redhat.com>
+Date: Tue, 18 Apr 2017 11:13:49 -0400
+Subject: [PATCH] rhel-systemd: start vswitchd after udev
+
+It's possible to race with the udev service, such that dpdk ports are
+not finished being bound until after ovs-vswitchd has been started.
+This means that attempts to use the port will fail.  While it is
+possible to work around this for some NICs using port hotplug, not all
+port types are supported (for instance vfio), and it requires manual
+intervention.
+
+Fixes: 36af136b690c ("rhel-systemd: Delay shutting down the services")
+Reported-at: https://bugzilla.redhat.com/show_bug.cgi?id=1397299
+Suggested-by: Flavio Leitner <fbl@sysclose.org>
+Signed-off-by: Aaron Conole <aconole@redhat.com>
+Tested-by: Karthik Sundaravel <ksundara@redhat.com>
+Signed-off-by: Russell Bryant <russell@ovn.org>
+---
+ rhel/usr_lib_systemd_system_ovs-vswitchd.service | 2 +-
+ 1 files changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/rhel/usr_lib_systemd_system_ovs-vswitchd.service b/rhel/usr_lib_systemd_system_ovs-vswitchd.service
+index 39627e9..22a4c63 100644
+--- a/rhel/usr_lib_systemd_system_ovs-vswitchd.service
++++ b/rhel/usr_lib_systemd_system_ovs-vswitchd.service
+@@ -1,6 +1,6 @@
+ [Unit]
+ Description=Open vSwitch Forwarding Unit
+-After=ovsdb-server.service network-pre.target
++After=ovsdb-server.service network-pre.target systemd-udev-settle.service
+ Before=network.target network.service
+ Requires=ovsdb-server.service
+ ReloadPropagatedFrom=ovsdb-server.service
+-- 
+2.9.4
+

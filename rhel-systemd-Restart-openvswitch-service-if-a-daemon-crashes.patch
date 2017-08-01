@@ -1,0 +1,99 @@
+From c19bf36d848cbdf755c6760fad1726c95e4377f1 Mon Sep 17 00:00:00 2001
+From: Eelco Chaudron <echaudro@redhat.com>
+Date: Mon, 27 Feb 2017 15:56:41 -0500
+Subject: [PATCH] rhel-systemd: Restart openvswitch service if a daemon crashes
+
+Currently if either ovsdb-server or ovs-vswitchd is crashing the
+daemon is not restarting leaving the system in faulty state.
+This patch will detect the daemon crash and will restart the
+openvswitch service.
+
+Here is a (bit to wide) table showing the behavior before and after
+the patch. Note that only the Crash behavior has changed:
+
+Before patch:
+                               |       Process Status        |             systemctl <> status            |
+                               | ovs-vswitchd | ovsdb-server | openvswitch  | ovs-vswitchd | ovsdb-server |
+                               +--------------+--------------+--------------+--------------+--------------+
+systemctl start openvswitch*   | started      | started      |active,exited |active,running|active,running|
+Crash vswitchd                 | crashed      | stopped      |inactive, dead|failed        |inactive,dead |
+Crash ovsdb                    | stopped      | crashed      |inactive, dead|inactive,dead |failed        |
+systemctl restart openvswitch  | re-started   | re-started   |active,exited |active,running|active,running|
+systemctl restart ovs-vswitchd | re-started   | re-started   |active,exited |active,running|active,running|
+systemctl restart ovsdb-server | re-started   | re-started   |active,exited |active,running|active,running|
+systemctl stop openvswitch     | stopped      | stopped      |inactive, dead|inactive,dead |inactive,dead |
+systemctl stop ovs-vswitchd    | stopped      | stopped      |inactive, dead|inactive,dead |inactive,dead |
+systemctl stop ovsdb-server    | stopped      | stopped      |inactive, dead|inactive,dead |inactive,dead |
+systemctl start ovs-vswitchd*  | started      | started      |inactive, dead|active,running|active,running|
+systemctl start ovsdb-server*  | not started  | started      |inactive, dead|inactive, dead|active,running|
+
+With patch:
+                               |       Process Status        |             systemctk <> status            |
+                               | ovs-vswitchd | ovsdb-server | openvswitch  | ovs-vswitchd | ovsdb-server |
+                               +--------------+--------------+--------------+--------------+--------------+
+systemctl start openvswitch*   | started      | started      |active,exited |active,running|active,running|
+Crash vswitchd                 | crash,started| re-started   |active,exited |active,running|active,running|
+Crash ovsdb                    | re-started   | crash,started|active,exited |active,running|active,running|
+systemctl restart openvswitch  | re-started   | re-started   |active,exited |active,running|active,running|
+systemctl restart ovs-vswitchd | re-started   | re-started   |active,exited |active,running|active,running|
+systemctl restart ovsdb-server | re-started   | re-started   |active,exited |active,running|active,running|
+systemctl stop openvswitch     | stopped      | stopped      |inactive, dead|inactive,dead |inactive,dead |
+systemctl stop ovs-vswitchd    | stopped      | stopped      |inactive, dead|inactive,dead |inactive,dead |
+systemctl stop ovsdb-server    | stopped      | stopped      |inactive, dead|inactive,dead |inactive,dead |
+systemctl start ovs-vswitchd*  | started      | started      |inactive, dead|active,running|active,running|
+systemctl start ovsdb-server*  | not started  | started      |inactive, dead|inactive, dead|active,running|
+
+* These commands where executed when no ovs related processes where
+  running. All other commands where executed when OVS was successfully
+  running.
+
+Signed-off-by: Eelco Chaudron <echaudro@redhat.com>
+Acked-by: Markos Chandras <mchandras@suse.de>
+Acked-by: Aaron Conole <aconole@redhat.com>
+Acked-by: Flavio Leitner <fbl@sysclose.org>
+Signed-off-by: Russell Bryant <russell@ovn.org>
+---
+ rhel/usr_lib_systemd_system_openvswitch.service  | 4 ++--
+ rhel/usr_lib_systemd_system_ovs-vswitchd.service | 1 +
+ rhel/usr_lib_systemd_system_ovsdb-server.service | 1 +
+ 3 files changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/rhel/usr_lib_systemd_system_openvswitch.service b/rhel/usr_lib_systemd_system_openvswitch.service
+index bdbceaefbb..faca44b544 100644
+--- a/rhel/usr_lib_systemd_system_openvswitch.service
++++ b/rhel/usr_lib_systemd_system_openvswitch.service
+@@ -3,8 +3,8 @@ Description=Open vSwitch
+ Before=network.target network.service
+ After=network-pre.target ovsdb-server.service ovs-vswitchd.service
+ PartOf=network.target
+-BindsTo=ovsdb-server.service
+-BindsTo=ovs-vswitchd.service
++Requires=ovsdb-server.service
++Requires=ovs-vswitchd.service
+ 
+ [Service]
+ Type=oneshot
+diff --git a/rhel/usr_lib_systemd_system_ovs-vswitchd.service b/rhel/usr_lib_systemd_system_ovs-vswitchd.service
+index 01d9cee26b..39627e96e9 100644
+--- a/rhel/usr_lib_systemd_system_ovs-vswitchd.service
++++ b/rhel/usr_lib_systemd_system_ovs-vswitchd.service
+@@ -9,6 +9,7 @@ PartOf=openvswitch.service
+ 
+ [Service]
+ Type=forking
++Restart=on-failure
+ EnvironmentFile=-/etc/sysconfig/openvswitch
+ ExecStart=/usr/share/openvswitch/scripts/ovs-ctl \
+           --no-ovsdb-server --no-monitor --system-id=random \
+diff --git a/rhel/usr_lib_systemd_system_ovsdb-server.service b/rhel/usr_lib_systemd_system_ovsdb-server.service
+index d3d740839f..68deace7ce 100644
+--- a/rhel/usr_lib_systemd_system_ovsdb-server.service
++++ b/rhel/usr_lib_systemd_system_ovsdb-server.service
+@@ -7,6 +7,7 @@ PartOf=openvswitch.service
+ 
+ [Service]
+ Type=forking
++Restart=on-failure
+ EnvironmentFile=-/etc/sysconfig/openvswitch
+ ExecStart=/usr/share/openvswitch/scripts/ovs-ctl \
+           --no-ovs-vswitchd --no-monitor --system-id=random \

@@ -1,0 +1,37 @@
+From 6785bb09edf1e1b660921308b527a822420b3667 Mon Sep 17 00:00:00 2001
+From: Aaron Conole <aconole@redhat.com>
+Date: Tue, 2 May 2017 16:17:48 -0400
+Subject: [PATCH 2/3] rhel: fix the fedora spec
+
+When commit d0c961a99f57 ("lib/automake.mk: don't install
+runtime directories") landed, it broke RPM based builds since
+the requisite directories were no longer available.  This commit
+adds those directories back when making RPMs so that the package
+manager can see them.
+
+Fixes: d0c961a99f57 ("lib/automake.mk: don't install runtime directories")
+Reported-by: Lance Richardson <lrichard@redhat.com>
+Tested-by: Lance Richardson <lrichard@redhat.com>
+Signed-off-by: Aaron Conole <aconole@redhat.com>
+Signed-off-by: Russell Bryant <rbryant@redhat.com>
+(cherry picked from commit 2f4f43bfddfd159a8cfe963234530922f602ae07)
+---
+ rhel/openvswitch-fedora.spec.in | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/rhel/openvswitch-fedora.spec.in b/rhel/openvswitch-fedora.spec.in
+index 30587aacb..ec4de510c 100644
+--- a/rhel/openvswitch-fedora.spec.in
++++ b/rhel/openvswitch-fedora.spec.in
+@@ -195,6 +195,8 @@ make -f %{_datadir}/selinux/devel/Makefile
+ rm -rf $RPM_BUILD_ROOT
+ make install DESTDIR=$RPM_BUILD_ROOT
+ 
++install -d -m 0755 $RPM_BUILD_ROOT%{_rundir}/openvswitch
++install -d -m 0755 $RPM_BUILD_ROOT%{_localstatedir}/log/openvswitch
+ install -d -m 0755 $RPM_BUILD_ROOT%{_sysconfdir}/openvswitch
+ 
+ install -p -D -m 0644 \
+-- 
+2.13.3
+
