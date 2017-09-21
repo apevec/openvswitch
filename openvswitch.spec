@@ -51,6 +51,7 @@ Source0: http://openvswitch.org/releases/%{name}-%{version}%{?snap_gitsha}.tar.g
 Source1: http://fast.dpdk.org/rel/dpdk-%{dpdkver}.tar.gz
 Source2: ovs-snapshot.sh
 
+Patch0: 0001-ofproto-Include-patch-ports-in-mtu-overriden-check.patch
 
 %if %{with dpdk}
 %define dpdkarches x86_64 i686 aarch64 ppc64le

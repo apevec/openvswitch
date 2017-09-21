@@ -1,0 +1,52 @@
+From 4a103c6033354f2165ef77d4b14c3f6c6d3cd2e8 Mon Sep 17 00:00:00 2001
+From: Numan Siddique <nusiddiq@redhat.com>
+Date: Tue, 12 Sep 2017 14:22:03 +0530
+Subject: [PATCH] ofproto: Include patch ports in mtu overriden check
+
+When a patch port is deleted from the bridge (with no other ports
+in the bridge) and if the bridge was set to an MTU by the user earlier, the
+MTU of the bridge is overriden to 1500. Please see the below link for the
+steps to reproduce the issue.
+
+This patch fixes this issue.
+
+Reported-at: https://mail.openvswitch.org/pipermail/ovs-dev/2017-September/338665.html
+Signed-off-by: Numan Siddique <nusiddiq@redhat.com>
+Signed-off-by: Ben Pfaff <blp@ovn.org>
+---
+ ofproto/ofproto.c | 12 +++++++-----
+ 1 file changed, 7 insertions(+), 5 deletions(-)
+
+diff --git a/ofproto/ofproto.c b/ofproto/ofproto.c
+index 7541af0b2..9950897b8 100644
+--- a/ofproto/ofproto.c
++++ b/ofproto/ofproto.c
+@@ -2721,18 +2721,20 @@ init_ports(struct ofproto *p)
+ }
+ 
+ static bool
+-ofport_is_internal(const struct ofproto *p, const struct ofport *port)
++ofport_is_internal_or_patch(const struct ofproto *p, const struct ofport *port)
+ {
+     return !strcmp(netdev_get_type(port->netdev),
+-                   ofproto_port_open_type(p->type, "internal"));
++                   ofproto_port_open_type(p->type, "internal")) ||
++           !strcmp(netdev_get_type(port->netdev),
++                   ofproto_port_open_type(p->type, "patch"));
+ }
+ 
+-/* If 'port' is internal and if the user didn't explicitly specify an mtu
+- * through the database, we have to override it. */
++/* If 'port' is internal or patch and if the user didn't explicitly specify an
++ * mtu through the database, we have to override it. */
+ static bool
+ ofport_is_mtu_overridden(const struct ofproto *p, const struct ofport *port)
+ {
+-    return ofport_is_internal(p, port)
++    return ofport_is_internal_or_patch(p, port)
+            && !netdev_mtu_is_user_config(port->netdev);
+ }
+ 
+-- 
+2.13.3
+
