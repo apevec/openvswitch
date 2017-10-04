@@ -24,12 +24,12 @@
 # Enable PIE, bz#955181
 %global _hardened_build 1
 
-%define dpdkver 16.11.2
+%define dpdkver 16.11.3
 %define dpdkdir dpdk-stable
 %define dpdksver %(echo %{dpdkver} | cut -d. -f-2)
 
 Name: openvswitch
-Version: 2.7.2
+Version: 2.7.3
 Release: 1%{?snapshot}%{?dist}
 Summary: Open vSwitch daemon/database/utilities
 
@@ -650,6 +650,9 @@ rm -rf $RPM_BUILD_ROOT
 %{_unitdir}/ovn-controller-vtep.service
 
 %changelog
+* Wed Oct 04 2017 Timothy Redaelli <tredaelli@redhat.com> - 2.7.3-1
+- Updated to Open vSwitch 2.7.3 and DPDK 16.11.3 (CVE-2017-14970) (#1497967)
+
 * Wed Jul 19 2017 Timothy Redaelli <tredaelli@redhat.com> - 2.7.2-1
 - Update to Open vSwitch 2.7.2
 - Add a symlink of the OCF script in the OCF resources folder
