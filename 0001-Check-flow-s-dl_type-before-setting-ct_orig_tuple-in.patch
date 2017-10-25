@@ -1,0 +1,55 @@
+From 62594393f884a01c81f1d840174aa0a3d1e07962 Mon Sep 17 00:00:00 2001
+From: Numan Siddique <nusiddiq@redhat.com>
+Date: Wed, 25 Oct 2017 11:10:25 +0530
+Subject: [PATCH v2] Check flow's dl_type before setting ct_orig_tuple in
+ 'pkt_metadata_from_flow()'
+
+Normally flow's dl_type will be a valid value. However when a packet is sent to
+the controller, dl_type is not stored in the 'ofputil_packet_in_private'. When
+the controller resumes (OFPRAW_NXT_RESUME) the packet, the flow's dl_type will be
+0. If the flow's ct_state has valid value, then the 'pkt_metadata_from_flow'
+neither sets the ct_orig_tuple from the flow nor resets it. This results in invalid
+value ct_orig_tuple in the pkt_metadata.
+
+This patch handles this situation by checking the dl_type before setting the
+ct_orig_tuple. If dl_type is 0, it resets it. It also resets ct_orig_tuple if
+dl_type is non zero and other than IPv4 or IPv6.
+
+Reported-by: Daniel Alvarez Sanchez <dalvarez@redhat.com>
+Reported-at: https://mail.openvswitch.org/pipermail/ovs-dev/2017-October/339868.html
+Signed-off-by: Numan Siddique <nusiddiq@redhat.com>
+---
+ lib/flow.h | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+v1 -> v2
+--------
+Addressed review comments - Reset the ct_orig_tuple if dl_type is not
+zero and other than IPv4 or IPv6
+
+diff --git a/lib/flow.h b/lib/flow.h
+index 6ae5a674d..b3128dab3 100644
+--- a/lib/flow.h
++++ b/lib/flow.h
+@@ -929,7 +929,7 @@ pkt_metadata_from_flow(struct pkt_metadata *md, const struct flow *flow)
+     md->ct_label = flow->ct_label;
+ 
+     md->ct_orig_tuple_ipv6 = false;
+-    if (is_ct_valid(flow, NULL, NULL)) {
++    if (flow->dl_type && is_ct_valid(flow, NULL, NULL)) {
+         if (flow->dl_type == htons(ETH_TYPE_IP)) {
+             md->ct_orig_tuple.ipv4 = (struct ovs_key_ct_tuple_ipv4) {
+                 flow->ct_nw_src,
+@@ -947,6 +947,9 @@ pkt_metadata_from_flow(struct pkt_metadata *md, const struct flow *flow)
+                 flow->ct_tp_dst,
+                 flow->ct_nw_proto,
+             };
++        } else {
++            /* Reset ct_orig_tuple for other types. */
++            memset(&md->ct_orig_tuple, 0, sizeof md->ct_orig_tuple);
+         }
+     } else {
+         memset(&md->ct_orig_tuple, 0, sizeof md->ct_orig_tuple);
+-- 
+2.13.5
+
