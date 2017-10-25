@@ -39,7 +39,7 @@ Name: openvswitch
 # Carried over from 2.6.1 CBS builds, introduced to win over 2.6.90
 Epoch:   1
 Version: 2.8.1
-Release: 1.1fc28%{?snapshot}%{?dist}
+Release: 2.1fc28%{?snapshot}%{?dist}
 Summary: Open vSwitch daemon/database/utilities
 
 # Nearly all of openvswitch is ASL 2.0.  The bugtool is LGPLv2+, and the
@@ -51,6 +51,7 @@ Source0: http://openvswitch.org/releases/%{name}-%{version}%{?snap_gitsha}.tar.g
 Source1: http://fast.dpdk.org/rel/dpdk-%{dpdkver}.tar.gz
 Source2: ovs-snapshot.sh
 
+Patch0: 0001-Check-flow-s-dl_type-before-setting-ct_orig_tuple-in.patch
 
 %if %{with dpdk}
 %define dpdkarches x86_64 i686 aarch64 ppc64le
@@ -714,6 +715,10 @@ fi
 %{_unitdir}/ovn-controller-vtep.service
 
 %changelog
+* Fri Oct 26 2017 Numan Siddique <nusiddiq@redhat.com> - 2.8.1
+- Added the patch 0001-Check-flow-s-dl_type-before-setting-ct_orig_tuple-in.patch to
+  fix an issue until OVS 2.8.2 is available
+
 * Mon Oct 02 2017 Timothy Redaelli <tredaelli@redhat.com> - 2.8.1-1
 - Update to Open vSwitch 2.8.1
 
