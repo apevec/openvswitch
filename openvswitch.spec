@@ -715,7 +715,7 @@ fi
 %{_unitdir}/ovn-controller-vtep.service
 
 %changelog
-* Fri Oct 26 2017 Numan Siddique <nusiddiq@redhat.com> - 2.8.1
+* Thu Oct 26 2017 Numan Siddique <nusiddiq@redhat.com> - 2.8.1-2
 - Added the patch 0001-Check-flow-s-dl_type-before-setting-ct_orig_tuple-in.patch to
   fix an issue until OVS 2.8.2 is available
 
