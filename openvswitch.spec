@@ -39,7 +39,7 @@ Name: openvswitch
 # Carried over from 2.6.1 CBS builds, introduced to win over 2.6.90
 Epoch:   1
 Version: 2.8.1
-Release: 2.1fc28%{?snapshot}%{?dist}
+Release: 3.1fc28%{?snapshot}%{?dist}
 Summary: Open vSwitch daemon/database/utilities
 
 # Nearly all of openvswitch is ASL 2.0.  The bugtool is LGPLv2+, and the
@@ -52,6 +52,7 @@ Source1: http://fast.dpdk.org/rel/dpdk-%{dpdkver}.tar.gz
 Source2: ovs-snapshot.sh
 
 Patch0: 0001-Check-flow-s-dl_type-before-setting-ct_orig_tuple-in.patch
+Patch1: 0001-rhel-Add-support-for-systemctl-reload-openvswitch.patch
 
 %if %{with dpdk}
 %define dpdkarches x86_64 i686 aarch64 ppc64le
@@ -220,6 +221,8 @@ Docker network plugins for OVN.
 
 %prep
 %autosetup -n %{name}-%{version}%{?snap_gitsha} -a 1 -p 1
+# one of the patches modifies automake files
+autoreconf
 
 %build
 %if %{with dpdk}
@@ -406,6 +409,10 @@ install -p -m 0644 rhel/usr_lib_firewalld_services_ovn-host-firewall-service.xml
 install -d -m 0755 $RPM_BUILD_ROOT%{_prefix}/lib/ocf/resource.d/ovn
 ln -s %{_datadir}/openvswitch/scripts/ovndb-servers.ocf \
       $RPM_BUILD_ROOT%{_prefix}/lib/ocf/resource.d/ovn/ovndb-servers
+
+install -p -D -m 0755 \
+        rhel/usr_share_openvswitch_scripts_ovs-systemd-reload \
+        $RPM_BUILD_ROOT%{_datadir}/openvswitch/scripts/ovs-systemd-reload
 
 touch $RPM_BUILD_ROOT%{_sysconfdir}/openvswitch/conf.db
 touch $RPM_BUILD_ROOT%{_sysconfdir}/openvswitch/system-id.conf
@@ -631,6 +638,7 @@ fi
 %{_datadir}/openvswitch/scripts/ovs-lib
 %{_datadir}/openvswitch/scripts/ovs-vtep
 %{_datadir}/openvswitch/scripts/ovs-ctl
+%{_datadir}/openvswitch/scripts/ovs-systemd-reload
 %config %{_datadir}/openvswitch/vswitch.ovsschema
 %config %{_datadir}/openvswitch/vtep.ovsschema
 %{_bindir}/ovs-appctl
@@ -715,6 +723,9 @@ fi
 %{_unitdir}/ovn-controller-vtep.service
 
 %changelog
+* Fri Dec 22 2017 Alan Pevec <apevec AT redhat.com> - 2.8.1-3
+- Fix systemctl reload openvswitch hangs rhbz#1525618
+
 * Thu Oct 26 2017 Numan Siddique <nusiddiq@redhat.com> - 2.8.1-2
 - Added the patch 0001-Check-flow-s-dl_type-before-setting-ct_orig_tuple-in.patch to
   fix an issue until OVS 2.8.2 is available

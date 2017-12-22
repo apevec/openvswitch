@@ -1,0 +1,134 @@
+From def59ecd1211a9fae8711ece3f570004616f59a5 Mon Sep 17 00:00:00 2001
+From: Timothy Redaelli <tredaelli@redhat.com>
+Date: Fri, 3 Nov 2017 21:39:17 +0100
+Subject: [PATCH] rhel: Add support for "systemctl reload openvswitch"
+
+The reload procedure will trigger a script that saves the flows and tlv
+maps (using ovs-save) then it restarts ovsdb-server, it stops ovs-vswitchd,
+it sets other_config:flow-restore-wait=true (to wait till flow restore is
+finished), it starts ovs-vswitchd, it restore the backupped flows/tlv
+maps and it removes other_config:flow-restore-wait=true (logic mostly ripped
+from ovs-ctl).
+
+It uses systemctl with --job-mode=ignore-dependencies to restart ovsdb-server
+and stop and start ovs-vswitchd in order to avoid systemd to restart the other
+components due to dependencies (as explained in rhel/README.RHEL.rst).
+
+Signed-off-by: Timothy Redaelli <tredaelli@redhat.com>
+Signed-off-by: Ben Pfaff <blp@ovn.org>
+Acked-by: Flavio Leitner <fbl@sysclose.org>
+(cherry picked from commit ea36b04688f37cf45b7c2304ce31f0d29f212d54)
+---
+ rhel/automake.mk                                   |  1 +
+ rhel/openvswitch-fedora.spec.in                    |  5 +++
+ rhel/usr_lib_systemd_system_openvswitch.service    |  2 +-
+ rhel/usr_lib_systemd_system_ovsdb-server.service   |  1 -
+ ...sr_share_openvswitch_scripts_ovs-systemd-reload | 36 ++++++++++++++++++++++
+ 5 files changed, 43 insertions(+), 2 deletions(-)
+ create mode 100755 rhel/usr_share_openvswitch_scripts_ovs-systemd-reload
+
+diff --git a/rhel/automake.mk b/rhel/automake.mk
+index 1d1ac1a13..fee85934f 100644
+--- a/rhel/automake.mk
++++ b/rhel/automake.mk
+@@ -24,6 +24,7 @@ EXTRA_DIST += \
+ 	rhel/openvswitch.spec.in \
+ 	rhel/openvswitch-fedora.spec \
+ 	rhel/openvswitch-fedora.spec.in \
++	rhel/usr_share_openvswitch_scripts_ovs-systemd-reload \
+ 	rhel/usr_share_openvswitch_scripts_sysconfig.template \
+ 	rhel/usr_share_openvswitch_scripts_systemd_sysconfig.template \
+ 	rhel/usr_lib_udev_rules.d_91-vfio.rules \
+diff --git a/rhel/openvswitch-fedora.spec.in b/rhel/openvswitch-fedora.spec.in
+index dd79fa9a0..5b269b5e9 100644
+--- a/rhel/openvswitch-fedora.spec.in
++++ b/rhel/openvswitch-fedora.spec.in
+@@ -314,6 +314,10 @@ install -d -m 0755 $RPM_BUILD_ROOT%{_prefix}/lib/ocf/resource.d/ovn
+ ln -s %{_datadir}/openvswitch/scripts/ovndb-servers.ocf \
+       $RPM_BUILD_ROOT%{_prefix}/lib/ocf/resource.d/ovn/ovndb-servers
+ 
++install -p -D -m 0755 \
++        rhel/usr_share_openvswitch_scripts_ovs-systemd-reload \
++        $RPM_BUILD_ROOT%{_datadir}/openvswitch/scripts/ovs-systemd-reload
++
+ # remove unpackaged files
+ rm -f $RPM_BUILD_ROOT%{_bindir}/ovs-parse-backtrace \
+         $RPM_BUILD_ROOT%{_sbindir}/ovs-vlan-bug-workaround \
+@@ -538,6 +542,7 @@ fi
+ %{_datadir}/openvswitch/scripts/ovs-save
+ %{_datadir}/openvswitch/scripts/ovs-vtep
+ %{_datadir}/openvswitch/scripts/ovs-ctl
++%{_datadir}/openvswitch/scripts/ovs-systemd-reload
+ %config %{_datadir}/openvswitch/vswitch.ovsschema
+ %config %{_datadir}/openvswitch/vtep.ovsschema
+ %{_bindir}/ovs-appctl
+diff --git a/rhel/usr_lib_systemd_system_openvswitch.service b/rhel/usr_lib_systemd_system_openvswitch.service
+index faca44b54..feaba37d5 100644
+--- a/rhel/usr_lib_systemd_system_openvswitch.service
++++ b/rhel/usr_lib_systemd_system_openvswitch.service
+@@ -9,7 +9,7 @@ Requires=ovs-vswitchd.service
+ [Service]
+ Type=oneshot
+ ExecStart=/bin/true
+-ExecReload=/bin/true
++ExecReload=/usr/share/openvswitch/scripts/ovs-systemd-reload
+ ExecStop=/bin/true
+ RemainAfterExit=yes
+ 
+diff --git a/rhel/usr_lib_systemd_system_ovsdb-server.service b/rhel/usr_lib_systemd_system_ovsdb-server.service
+index 7acd25f78..651b3002f 100644
+--- a/rhel/usr_lib_systemd_system_ovsdb-server.service
++++ b/rhel/usr_lib_systemd_system_ovsdb-server.service
+@@ -2,7 +2,6 @@
+ Description=Open vSwitch Database Unit
+ After=syslog.target network-pre.target
+ Before=network.target network.service
+-ReloadPropagatedFrom=openvswitch.service
+ PartOf=openvswitch.service
+ 
+ [Service]
+diff --git a/rhel/usr_share_openvswitch_scripts_ovs-systemd-reload b/rhel/usr_share_openvswitch_scripts_ovs-systemd-reload
+new file mode 100755
+index 000000000..3ac1a46c6
+--- /dev/null
++++ b/rhel/usr_share_openvswitch_scripts_ovs-systemd-reload
+@@ -0,0 +1,36 @@
++#! /bin/sh
++
++# Copyright (c) 2017 Red Hat, Inc.
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at:
++#
++#     http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++# Save flows
++bridges=$(ovs-vsctl -- --real list-br)
++flows=$(/usr/share/openvswitch/scripts/ovs-save save-flows $bridges)
++
++# Restart the database first, since a large database may take a
++# while to load, and we want to minimize forwarding disruption.
++systemctl --job-mode=ignore-dependencies restart ovsdb-server
++
++# Stop ovs-vswitchd.
++systemctl --job-mode=ignore-dependencies stop ovs-vswitchd
++
++# Start vswitchd by asking it to wait till flow restore is finished.
++ovs-vsctl --no-wait set open_vswitch . other_config:flow-restore-wait=true
++systemctl --job-mode=ignore-dependencies start ovs-vswitchd
++
++# Restore saved flows and inform vswitchd that we are done.
++eval "$flows"
++ovs-vsctl --if-exists remove open_vswitch . other_config flow-restore-wait=true
++
++exit 0
+-- 
+2.14.3
+
