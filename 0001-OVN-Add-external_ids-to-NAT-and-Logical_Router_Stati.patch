@@ -1,0 +1,95 @@
+From 6cbca04f4033de8fb7fa73e4f1182499c1187b65 Mon Sep 17 00:00:00 2001
+From: Lucas Alvares Gomes <lucasagomes@gmail.com>
+Date: Wed, 6 Dec 2017 09:59:23 +0000
+Subject: [PATCH] OVN: Add external_ids to NAT and Logical_Router_Static_Route
+ tables.
+
+The external_ids column is missing from the NAT and
+Logical_Router_Static_Route tables.
+
+As discussed at [0] the change to the schema for this backport should
+leave the version number unmodified.
+
+[0]
+https://mail.openvswitch.org/pipermail/ovs-dev/2017-December/341630.html
+
+Signed-off-by: Lucas Alvares Gomes <lucasagomes@gmail.com>
+Signed-off-by: Russell Bryant <russell@ovn.org>
+(cherry picked from commit 7d0959a6225d32580d234ce2a456bbab7fa3f1e0)
+---
+ ovn/ovn-nb.ovsschema | 12 +++++++++---
+ ovn/ovn-nb.xml       | 14 ++++++++++++++
+ 2 files changed, 23 insertions(+), 3 deletions(-)
+
+diff --git a/ovn/ovn-nb.ovsschema b/ovn/ovn-nb.ovsschema
+index a077bfb81..30fe610ff 100644
+--- a/ovn/ovn-nb.ovsschema
++++ b/ovn/ovn-nb.ovsschema
+@@ -1,7 +1,7 @@
+ {
+     "name": "OVN_Northbound",
+     "version": "5.8.0",
+-    "cksum": "2812300190 16766",
++    "cksum": "3279121944 17086",
+     "tables": {
+         "NB_Global": {
+             "columns": {
+@@ -235,7 +235,10 @@
+                                                              "dst-ip"]]},
+                                     "min": 0, "max": 1}},
+                 "nexthop": {"type": "string"},
+-                "output_port": {"type": {"key": "string", "min": 0, "max": 1}}},
++                "output_port": {"type": {"key": "string", "min": 0, "max": 1}},
++                "external_ids": {
++                    "type": {"key": "string", "value": "string",
++                             "min": 0, "max": "unlimited"}}},
+             "isRoot": false},
+         "NAT": {
+             "columns": {
+@@ -249,7 +252,10 @@
+                                            "enum": ["set", ["dnat",
+                                                              "snat",
+                                                              "dnat_and_snat"
+-                                                               ]]}}}},
++                                                               ]]}}},
++                "external_ids": {
++                    "type": {"key": "string", "value": "string",
++                             "min": 0, "max": "unlimited"}}},
+             "isRoot": false},
+         "DHCP_Options": {
+             "columns": {
+diff --git a/ovn/ovn-nb.xml b/ovn/ovn-nb.xml
+index 9869d7ed7..5ad1c1dbe 100644
+--- a/ovn/ovn-nb.xml
++++ b/ovn/ovn-nb.xml
+@@ -1487,6 +1487,13 @@
+         address as the one via which the <ref column="nexthop"/> is reachable.
+       </p>
+     </column>
++
++    <group title="Common Columns">
++      <column name="external_ids">
++        See <em>External IDs</em> at the beginning of this document.
++      </column>
++    </group>
++
+   </table>
+ 
+   <table name="NAT" title="NAT rules">
+@@ -1565,6 +1572,13 @@
+         port instance on the <code>redirect-chassis</code>.
+       </p>
+     </column>
++
++    <group title="Common Columns">
++      <column name="external_ids">
++        See <em>External IDs</em> at the beginning of this document.
++      </column>
++    </group>
++
+   </table>
+ 
+   <table name="DHCP_Options" title="DHCP options">
+-- 
+2.14.3
+

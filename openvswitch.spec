@@ -39,7 +39,7 @@ Name: openvswitch
 # Carried over from 2.6.1 CBS builds, introduced to win over 2.6.90
 Epoch:   1
 Version: 2.8.1
-Release: 3.1fc28%{?snapshot}%{?dist}
+Release: 4.1fc28%{?snapshot}%{?dist}
 Summary: Open vSwitch daemon/database/utilities
 
 # Nearly all of openvswitch is ASL 2.0.  The bugtool is LGPLv2+, and the
@@ -53,6 +53,7 @@ Source2: ovs-snapshot.sh
 
 Patch0: 0001-Check-flow-s-dl_type-before-setting-ct_orig_tuple-in.patch
 Patch1: 0001-rhel-Add-support-for-systemctl-reload-openvswitch.patch
+Patch2: 0001-OVN-Add-external_ids-to-NAT-and-Logical_Router_Stati.patch
 
 %if %{with dpdk}
 %define dpdkarches x86_64 i686 aarch64 ppc64le
@@ -723,6 +724,9 @@ fi
 %{_unitdir}/ovn-controller-vtep.service
 
 %changelog
+* Wed Jan 03 2018 Alan Pevec <apevec AT redhat.com> - 2.8.1-4
+- OVN: Add external_ids https://bugs.launchpad.net/bugs/1740698
+
 * Fri Dec 22 2017 Alan Pevec <apevec AT redhat.com> - 2.8.1-3
 - Fix systemctl reload openvswitch hangs rhbz#1525618
 
