@@ -39,7 +39,7 @@ Name: openvswitch
 # Carried over from 2.6.1 CBS builds, introduced to win over 2.6.90
 Epoch:   1
 Version: 2.8.1
-Release: 4.1fc28%{?snapshot}%{?dist}
+Release: 5.1fc28%{?snapshot}%{?dist}
 Summary: Open vSwitch daemon/database/utilities
 
 # Nearly all of openvswitch is ASL 2.0.  The bugtool is LGPLv2+, and the
@@ -496,10 +496,10 @@ if [ $1 -eq 1 ]; then
     sed -i \
         's@OVS_USER_ID="openvswitch:openvswitch"@OVS_USER_ID="openvswitch:hugetlbfs"@'\
         /etc/sysconfig/openvswitch
-
-    # In the case of upgrade, this is not needed.
-    chown -R openvswitch:openvswitch /etc/openvswitch
 fi
+# Package %files sets /etc/openvswitch to root:root in installation and upgrade so
+# we always need to reset ownership
+chown -R openvswitch:openvswitch /etc/openvswitch
 
 %if 0%{?systemd_post:1}
     %systemd_post %{name}.service
@@ -724,6 +724,9 @@ fi
 %{_unitdir}/ovn-controller-vtep.service
 
 %changelog
+* Fri Jan 26 2018 Alfredo Moralejo <amoralej@redhat.com> - 2.8.1-5
+- Fix permissions issue in configuration directory in package upgrades
+
 * Wed Jan 03 2018 Alan Pevec <apevec AT redhat.com> - 2.8.1-4
 - OVN: Add external_ids https://bugs.launchpad.net/bugs/1740698
 
