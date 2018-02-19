@@ -117,7 +117,7 @@ Requires: openssl iproute module-init-tools
 
 Requires(post): /usr/bin/getent
 Requires(post): /usr/sbin/useradd
-Requires(post): /usr/bin/sed
+Requires(post): /bin/sed
 Requires(post): /usr/sbin/usermod
 Requires(post): /usr/sbin/groupadd
 Requires(post): systemd-units
@@ -724,6 +724,9 @@ chown -R openvswitch:openvswitch /etc/openvswitch
 %{_unitdir}/ovn-controller-vtep.service
 
 %changelog
+* Mon Feb 19 2018 Timothy Redaelli <tredaelli@redhat.com> - 2.8.1-6
+- Changed "Requires(post): /usr/bin/sed" to "Requires(post): /bin/sed" (#1506245)
+
 * Fri Jan 26 2018 Alfredo Moralejo <amoralej@redhat.com> - 2.8.1-5
 - Fix permissions issue in configuration directory in package upgrades
 
