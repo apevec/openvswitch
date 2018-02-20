@@ -39,7 +39,7 @@ Name: openvswitch
 # Carried over from 2.6.1 CBS builds, introduced to win over 2.6.90
 Epoch:   1
 Version: 2.8.1
-Release: 5.1fc28%{?snapshot}%{?dist}
+Release: 6.1fc28%{?snapshot}%{?dist}
 Summary: Open vSwitch daemon/database/utilities
 
 # Nearly all of openvswitch is ASL 2.0.  The bugtool is LGPLv2+, and the
@@ -724,6 +724,9 @@ chown -R openvswitch:openvswitch /etc/openvswitch
 %{_unitdir}/ovn-controller-vtep.service
 
 %changelog
+* Tue Feb 20 2018 Haïkel Guémar <hguemar@fedoraproject.org> - 1:2.8.1-6.1fc28%{?dist}
+- Fix Requires(post) on EL7 due weird issue with /usr move (change from amoralej)
+
 * Mon Feb 19 2018 Timothy Redaelli <tredaelli@redhat.com> - 2.8.1-6
 - Changed "Requires(post): /usr/bin/sed" to "Requires(post): /bin/sed" (#1506245)
 
