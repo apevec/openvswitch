@@ -38,8 +38,8 @@
 Name: openvswitch
 # Carried over from 2.6.1 CBS builds, introduced to win over 2.6.90
 Epoch:   1
-Version: 2.8.1
-Release: 6.1fc28%{?snapshot}%{?dist}
+Version: 2.8.2
+Release: 1%{?snapshot}%{?dist}
 Summary: Open vSwitch daemon/database/utilities
 
 # Nearly all of openvswitch is ASL 2.0.  The bugtool is LGPLv2+, and the
@@ -51,9 +51,7 @@ Source0: http://openvswitch.org/releases/%{name}-%{version}%{?snap_gitsha}.tar.g
 Source1: http://fast.dpdk.org/rel/dpdk-%{dpdkver}.tar.gz
 Source2: ovs-snapshot.sh
 
-Patch0: 0001-Check-flow-s-dl_type-before-setting-ct_orig_tuple-in.patch
 Patch1: 0001-rhel-Add-support-for-systemctl-reload-openvswitch.patch
-Patch2: 0001-OVN-Add-external_ids-to-NAT-and-Logical_Router_Stati.patch
 
 %if %{with dpdk}
 %define dpdkarches x86_64 i686 aarch64 ppc64le
@@ -724,8 +722,8 @@ chown -R openvswitch:openvswitch /etc/openvswitch
 %{_unitdir}/ovn-controller-vtep.service
 
 %changelog
-* Tue Feb 20 2018 Haïkel Guémar <hguemar@fedoraproject.org> - 1:2.8.1-6.1fc28%{?dist}
-- Fix Requires(post) on EL7 due weird issue with /usr move (change from amoralej)
+* Thu Feb 22 2018 Alan Pevec <apevec AT redhat.com> - 2.8.2-1
+- Update to Open vSwitch 2.8.2
 
 * Mon Feb 19 2018 Timothy Redaelli <tredaelli@redhat.com> - 2.8.1-6
 - Changed "Requires(post): /usr/bin/sed" to "Requires(post): /bin/sed" (#1506245)

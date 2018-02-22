@@ -1,4 +1,4 @@
-From def59ecd1211a9fae8711ece3f570004616f59a5 Mon Sep 17 00:00:00 2001
+From 9ef2ad39f0126fb2f14e2766808ce3f73f2ba2a4 Mon Sep 17 00:00:00 2001
 From: Timothy Redaelli <tredaelli@redhat.com>
 Date: Fri, 3 Nov 2017 21:39:17 +0100
 Subject: [PATCH] rhel: Add support for "systemctl reload openvswitch"
@@ -40,7 +40,7 @@ index 1d1ac1a13..fee85934f 100644
  	rhel/usr_share_openvswitch_scripts_systemd_sysconfig.template \
  	rhel/usr_lib_udev_rules.d_91-vfio.rules \
 diff --git a/rhel/openvswitch-fedora.spec.in b/rhel/openvswitch-fedora.spec.in
-index dd79fa9a0..5b269b5e9 100644
+index 8663a5129..43183b2e1 100644
 --- a/rhel/openvswitch-fedora.spec.in
 +++ b/rhel/openvswitch-fedora.spec.in
 @@ -314,6 +314,10 @@ install -d -m 0755 $RPM_BUILD_ROOT%{_prefix}/lib/ocf/resource.d/ovn
@@ -54,7 +54,7 @@ index dd79fa9a0..5b269b5e9 100644
  # remove unpackaged files
  rm -f $RPM_BUILD_ROOT%{_bindir}/ovs-parse-backtrace \
          $RPM_BUILD_ROOT%{_sbindir}/ovs-vlan-bug-workaround \
-@@ -538,6 +542,7 @@ fi
+@@ -539,6 +543,7 @@ fi
  %{_datadir}/openvswitch/scripts/ovs-save
  %{_datadir}/openvswitch/scripts/ovs-vtep
  %{_datadir}/openvswitch/scripts/ovs-ctl
