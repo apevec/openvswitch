@@ -46,7 +46,7 @@ URL: http://www.openvswitch.org/
 # Carried over from 2.6.1 CBS builds, introduced to win over 2.6.90
 Epoch:   1
 Version: 2.9.0
-Release: 3%{?commit0:.%{date}git%{shortcommit0}}%{?dist}
+Release: 4%{?commit0:.%{date}git%{shortcommit0}}%{?dist}
 
 # Nearly all of openvswitch is ASL 2.0.  The bugtool is LGPLv2+, and the
 # lib/sflow*.[ch] files are SISSL
@@ -164,6 +164,7 @@ Requires: openssl iproute module-init-tools
 #Upstream kernel commit 4f647e0a3c37b8d5086214128614a136064110c3
 #Requires: kernel >= 3.15.0-0
 
+Requires(pre): shadow-utils
 Requires(post): /usr/bin/getent
 Requires(post): /usr/sbin/useradd
 Requires(post): /bin/sed
@@ -500,11 +501,15 @@ rm -rf $RPM_BUILD_ROOT
     fi
 %endif
 
+%pre
+getent group openvswitch >/dev/null || groupadd -r openvswitch
+getent passwd openvswitch >/dev/null || \
+    useradd -r -g openvswitch -d / -s /sbin/nologin \
+    -c "Open vSwitch Daemons" openvswitch
+exit 0
+
 %post
 if [ $1 -eq 1 ]; then
-    getent passwd openvswitch >/dev/null || \
-        useradd -r -d / -s /sbin/nologin -c "Open vSwitch Daemons" openvswitch
-
     sed -i 's:^#OVS_USER_ID=:OVS_USER_ID=:' /etc/sysconfig/openvswitch
 
     getent group hugetlbfs >/dev/null || \
@@ -747,6 +752,9 @@ fi
 %{_unitdir}/ovn-controller-vtep.service
 
 %changelog
+* Tue Apr 10 2018 Alan Pevec <apevec AT redhat.com> - 2.9.0-4
+- preo-create user/group rhbz#1565356
+
 * Tue Feb 20 2018 Iryna Shcherbina <ishcherb@redhat.com> - 2.9.0-3
 - Update Python 2 dependency declarations to new packaging standards
   (See https://fedoraproject.org/wiki/FinalizingFedoraSwitchtoPython3)
