@@ -1,0 +1,96 @@
+From 1c8ef314680b34b1ceb601885e2b9333ba2cc324 Mon Sep 17 00:00:00 2001
+From: Joe Stringer <joe@ovn.org>
+Date: Wed, 31 Aug 2016 11:06:05 -0700
+Subject: [PATCH 4/4] upcall: Replace ukeys for deleted flows.
+
+If a revalidator dumps/revalidates a flow during the 'dump' phase,
+resulting in the deletion of the flow, then the ukey state moves into
+UKEY_EVICTED, and the ukey is kept around until the 'sweep' phase. The
+ukey is kept around to ensure that cases like duplicated dumps from the
+datapaths do not result in multiple attribution of the same stats.
+
+However, if an upcall for this flow comes for a handler between the
+revalidator 'dump' and 'sweep' phases, the handler will lookup the ukey
+and find that the ukey exists, then skip installing a new flow entirely.
+As a result, for this period all traffic for the flow is slowpathed.
+If there is a lot of traffic hitting this flow, then it will all be
+handled in userspace until the 'sweep' phase. Eventually the
+revalidators will reach the sweep phase and delete the ukey, and
+subsequently the handlers should install a new flow.
+
+To reduce the slowpathing of this traffic during flow table transitions,
+allow the handler to identify this case during miss upcall handling and
+replace the existing ukey with a new ukey. The handler will then be able
+to install a flow for this traffic, allowing the traffic flow to return
+to the fastpath.
+
+Signed-off-by: Joe Stringer <joe@ovn.org>
+Acked-by: Jarno Rajahalme <jarno@ovn.org>
+---
+ ofproto/ofproto-dpif-upcall.c | 36 +++++++++++++++++++++++++++++++++++-
+ 1 file changed, 35 insertions(+), 1 deletion(-)
+
+diff --git a/ofproto/ofproto-dpif-upcall.c b/ofproto/ofproto-dpif-upcall.c
+index badbc211b..a2647124e 100644
+--- a/ofproto/ofproto-dpif-upcall.c
++++ b/ofproto/ofproto-dpif-upcall.c
+@@ -50,6 +50,7 @@ COVERAGE_DEFINE(dumped_duplicate_flow);
+ COVERAGE_DEFINE(dumped_new_flow);
+ COVERAGE_DEFINE(handler_duplicate_upcall);
+ COVERAGE_DEFINE(upcall_ukey_contention);
++COVERAGE_DEFINE(upcall_ukey_replace);
+ COVERAGE_DEFINE(revalidate_missed_dp_flow);
+ 
+ /* A thread that reads upcalls from dpif, forwards each upcall's packet,
+@@ -1585,6 +1586,39 @@ ukey_create_from_dpif_flow(const struct udpif *udpif,
+     return 0;
+ }
+ 
++static bool
++try_ukey_replace(struct umap *umap, struct udpif_key *old_ukey,
++                 struct udpif_key *new_ukey)
++    OVS_REQUIRES(umap->mutex)
++    OVS_TRY_LOCK(true, new_ukey->mutex)
++{
++    bool replaced = false;
++
++    if (!ovs_mutex_trylock(&old_ukey->mutex)) {
++        if (old_ukey->state == UKEY_EVICTED) {
++            /* The flow was deleted during the current revalidator dump,
++             * but its ukey won't be fully cleaned up until the sweep phase.
++             * In the mean time, we are receiving upcalls for this traffic.
++             * Expedite the (new) flow install by replacing the ukey. */
++            ovs_mutex_lock(&new_ukey->mutex);
++            cmap_replace(&umap->cmap, &old_ukey->cmap_node,
++                         &new_ukey->cmap_node, new_ukey->hash);
++            ovsrcu_postpone(ukey_delete__, old_ukey);
++            transition_ukey(old_ukey, UKEY_DELETED);
++            transition_ukey(new_ukey, UKEY_VISIBLE);
++            replaced = true;
++        }
++        ovs_mutex_unlock(&old_ukey->mutex);
++    }
++
++    if (replaced) {
++        COVERAGE_INC(upcall_ukey_replace);
++    } else {
++        COVERAGE_INC(handler_duplicate_upcall);
++    }
++    return replaced;
++}
++
+ /* Attempts to insert a ukey into the shared ukey maps.
+  *
+  * On success, returns true, installs the ukey and returns it in a locked
+@@ -1606,7 +1640,7 @@ ukey_install__(struct udpif *udpif, struct udpif_key *new_ukey)
+         /* Uncommon case: A ukey is already installed with the same UFID. */
+         if (old_ukey->key_len == new_ukey->key_len
+             && !memcmp(old_ukey->key, new_ukey->key, new_ukey->key_len)) {
+-            COVERAGE_INC(handler_duplicate_upcall);
++            locked = try_ukey_replace(umap, old_ukey, new_ukey);
+         } else {
+             struct ds ds = DS_EMPTY_INITIALIZER;
+ 
+-- 
+2.14.3
+

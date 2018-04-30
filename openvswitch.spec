@@ -40,20 +40,20 @@ Version: 2.6.1
 # datapath/ is GPLv2 (although not built into any of the binary packages)
 License: ASL 2.0 and LGPLv2+ and SISSL
 
-%define snapshot .git20161206
-%define rel 10.1%{?snapshot}
+%define snapshot .git20180130
+%define rel 28%{?snapshot}
 
 #define snapver 10346.git97bab959
 %define srcname openvswitch
 %define srcver %{version}%{?snapver:-%{snapver}}
 
-%define dpdkver 16.11
+%define dpdkver 16.11.5
 %define dpdksver %(echo %{dpdkver} | cut -d. -f-2)
 %define dpdktarget %{_arch}-native-linuxapp-gcc
 
 Release: %{?snapver:0.%{snapver}.}%{rel}%{?dist}
 Source: http://openvswitch.org/releases/%{srcname}-%{srcver}.tar.gz
-Source10: http://dpdk.org/browse/dpdk/snapshot/dpdk-%{dpdkver}.tar.gz
+Source10: http://fast.dpdk.org/rel/dpdk-%{dpdkver}.tar.xz
 
 # The DPDK is designed to optimize througput of network traffic using, among
 # other techniques, carefully crafted x86 assembly instructions.  As such it
@@ -64,7 +64,7 @@ ExclusiveArch: x86_64
 # Take patches applied to OVS 2.6 branch after latest release
 # generated with: git diff v2.6.1..remotes/origin/branch-2.6
 # latest commit included as indicated in patch name
-Patch1: openvswitch-2.6-branch-ff22de4f.patch 
+Patch1: openvswitch-2.6.1-59caa6327.patch
 
 # OVS backports
 # OVS 2.6 branch uses DPDK 16.07, backport patch to use DPDK 16.11
@@ -72,22 +72,11 @@ Patch10: openvswitch-2.6-dpdk16.11-update.patch
 # Backport OVN IPAM static MAC support for BZ 1368043
 Patch20: ovn-northd-support-IPAM-with-externally-specified-MAC.patch
 
-# Backport for OVN IPAM dhcp renewal request bz 1415449
-Patch21: 0001-ovn-Encode-dhcpv6-PACKET_IN-userdata-as-big-endian.patch
-Patch22: 0001-ovn-northd-Sort-options-in-put_dhcp-v6-_opts.patch
-Patch23: 0001-tests-Fix-race-in-ovn-vtep-3-HVs-1-VIFs-HV-1-GW-1-LS.patch
-Patch24: 0001-ovn-northd-Add-flows-in-DHCP_OPTIONS-pipeline-to-sup.patch
-
-# Backport fix for ovn-northd segfault BZ 1405094
-Patch30: ovsdb-idlc-Initialize-nonnull-string-columns-for-ins.patch
 # Backport OVN checksum option BZ 1418742
 Patch40: ovn-controller-Provide-the-option-to-set-Encap.optio.patch
 
 # Backport OVN firewalld configuration files BZ 1390938
 Patch41: rhel-firewall-service-files-for-OVN.patch
-
-# Backport make openvswitch service start return when ready BZ 1422227
-Patch42: rhel-make-openvswitch-service-start-return-when-read.patch
 
 # Backport ovn-northd ipam: handle the static MAC updates by the user BZ 1418261 
 Patch43: ovn-northd-ipam-handle-the-static-MAC-updates-by-the-user.patch
@@ -98,11 +87,6 @@ Patch44: 0001-rhel-ifup-support-vhost-user-client-mode.patch
 # Backport rhel-systemd: Restart openvswitch service if a daemon crashes BZ 1468334
 Patch50: rhel-systemd-Restart-openvswitch-service-if-a-daemon-crashes.patch
 
-# Backport fix for Avoid segfault for vswitchd BZ 1472334
-Patch55: 0001-mcast-snooping-Avoid-segfault-for-vswitchd.patch
-# Backport fix for Flush ports mdb when VLAN configuration changed BZ 1472335
-Patch56: 0001-mcast-snooping-Flush-ports-mdb-when-VLAN-configurati.patch
-
 # Backport fix to make logs not readable by other BZ 1431490
 Patch57: 0001-lib-automake.mk-don-t-install-runtime-directories.patch
 Patch58: 0002-rhel-fix-the-fedora-spec.patch
@@ -110,8 +94,39 @@ Patch59: 0003-make-logs-not-readable-by-other.patch
 
 Patch60: 0001-rhel-systemd-start-vswitchd-after-udev.patch
 
-Patch61: 0001-netdev-Fix-crash-when-ifa_netmask-is-null.patch
-Patch62: ovs-dev-v3-netdev-check-for-NULL-fields-in-netdev_get_addrs.patch
+# Backport for BZ 1359854
+Patch70: openvswitch-netdev-linux-do-not-send-packets-to-down-tap-ifaces.patch
+
+# Backport for BZ 1540017
+Patch75: openvswitch-rhel-systemd-Set-ovs-vswitchd-timeout-to-5-minutes.patch
+
+# Batckports for BZ 1550124
+Patch80: 0001-upcall-Reuse-flow_put-initializer.patch
+Patch81: 0002-upcall-Only-init-flow_put-if-ukey-is-installed.patch
+Patch82: 0003-upcall-Track-ukey-states.patch
+Patch83: 0004-upcall-Replace-ukeys-for-deleted-flows.patch
+
+# Backports for BZ 1556662, additional fixed for BZ 1550124
+patch90: openvswitch-revalidator-revent-double-delete-of-ukey.patch
+patch91: openvswitch-revalidator-complain-for-more-ukey-transitions.patch
+patch92: openvswitch-ofproto-dpif-upcall-fix-flow-setup-delete-race.patch
+patch93: openvswitch-revalidator-avoid-assert-in-transition_ukey.patch
+patch94: openvswitch-revalidator-improve-logging-for-transition_ukey.patch
+patch95: openvswitch-ofproto-dpif-upcall-transition-ukey-on-dp_ops-error.patch
+
+# Backports for BZ 1561939
+Patch96: 0001-LACP-Check-active-partner-sys-id.patch
+
+# DPDK backports
+
+# Backport for BZ 1497963
+Patch120: dpdk-16.11-i40e-Increase-max-packet-len-to-include-2-vlan-tags.patch
+
+# Backport for BZ 1506700
+Patch130: dpdk-16.11-i40e-fix-link-status-timeout.patch
+
+#Backport to add missing patch for Bz 1450680
+Patch140: 0001-vhost-user-fix-deadlock-in-case-of-NUMA-realloc.patch
 
 BuildRequires: autoconf automake libtool
 BuildRequires: systemd-units openssl openssl-devel
@@ -227,28 +242,37 @@ Docker network plugins for OVN.
 
 %prep
 %setup -q -n %{srcname}-%{srcver} -a 10
+mv dpdk-stable-%{dpdkver} dpdk-%{dpdkver}
 %patch1 -p1
 %patch10 -p1
 %patch20 -p1
-%patch21 -p1
-%patch22 -p1
-%patch23 -p1
-%patch24 -p1
-%patch30 -p1
 %patch40 -p1
 %patch41 -p1
-%patch42 -p1
 %patch43 -p1
 %patch44 -p1
 %patch50 -p1
-%patch55 -p1
-%patch56 -p1
 %patch57 -p1
 %patch58 -p1
 %patch59 -p1
 %patch60 -p1
-%patch61 -p1
-%patch62 -p1
+%patch70 -p1
+%patch75 -p1
+%patch80 -p1
+%patch81 -p1
+%patch82 -p1
+%patch83 -p1
+%patch90 -p1
+%patch91 -p1
+%patch92 -p1
+%patch93 -p1
+%patch94 -p1
+%patch95 -p1
+%patch96 -p1
+
+cd dpdk-%{dpdkver}
+%patch120 -p2
+%patch130 -p1
+%patch140 -p1
 
 %build
 %if 0%{?snapshot:1}
@@ -298,13 +322,45 @@ setconf CONFIG_RTE_LIBRTE_CRYPTODEV n
 
 # Enable DPDK libraries needed by OVS
 setconf CONFIG_RTE_LIBRTE_VHOST_NUMA y
-setconf CONFIG_RTE_LIBRTE_PMD_PCAP y
 
 # Disable PMDs that are either not needed or not stable
+
+# Start with all _PMD to be disabled
+for pmd in $(grep _PMD= %{dpdktarget}/.config | sed 's@=\(y\|n\)@@g')
+do
+    setconf $pmd n
+done
+
+# PMDs which have their own naming scheme
+# the default for this was 'n' at one point.  Make sure we keep it
+# as such
+setconf CONFIG_RTE_LIBRTE_PMD_QAT n
+setconf CONFIG_RTE_LIBRTE_PMD_OCTEONTX_SSOVF n
 setconf CONFIG_RTE_LIBRTE_PMD_VHOST n
+setconf CONFIG_RTE_LIBRTE_PMD_KNI n
+setconf CONFIG_RTE_LIBRTE_PMD_XENVIRT n
 setconf CONFIG_RTE_LIBRTE_PMD_NULL_CRYPTO n
-# BNX2X driver is not stable
-setconf CONFIG_RTE_LIBRTE_BNX2X_PMD n
+setconf CONFIG_RTE_LIBRTE_PMD_NULL n
+setconf CONFIG_RTE_LIBRTE_PMD_TAP n
+setconf CONFIG_RTE_LIBRTE_PMD_CRYPTO_SCHEDULER n
+setconf CONFIG_RTE_LIBRTE_PMD_SKELETON_EVENTDEV n
+setconf CONFIG_RTE_LIBRTE_PMD_SW_EVENTDEV n
+setconf CONFIG_RTE_LIBRTE_PMD_PCAP n
+setconf CONFIG_RTE_LIBRTE_PMD_BOND n
+setconf CONFIG_RTE_LIBRTE_PMD_AF_PACKET n
+
+# whitelist of enabled PMDs
+# Soft PMDs to enable
+setconf CONFIG_RTE_LIBRTE_PMD_RING y
+setconf CONFIG_RTE_LIBRTE_VIRTIO_PMD y
+
+# HW PMDs
+setconf CONFIG_RTE_LIBRTE_I40E_PMD y
+%ifarch x86_64 i686 aarch64
+setconf CONFIG_RTE_LIBRTE_ENIC_PMD y
+setconf CONFIG_RTE_LIBRTE_IXGBE_PMD y
+setconf CONFIG_RTE_LIBRTE_IGB_PMD y
+%endif
 
 # Disable virtio user as not used by OVS
 setconf CONFIG_RTE_VIRTIO_USER n
@@ -680,9 +736,70 @@ exit 0
 %{_unitdir}/ovn-controller-vtep.service
 
 %changelog
-* Tue Aug 01 2017 Timothy Redaelli <tredaelli@redhat.com> - 2.6.1-10.1.git20161206
+* Wed Apr 11 2018 Kevin Traynor <ktraynor@redhat.com> - 2.6.1-28.git20180130
+- Update DPDK to 16.11.5 (#1553812)
+- DPDK 16.11.5 includes patch for 'vhost: protect active rings' (#1450680)
+- Backport additional 'vhost-user: fix deadlock' patch for (#1450680)
+
+* Thu Mar 29 2018 Timothy Redaelli <tredaelli@redhat.com> - 2.6.1-27.git20180130
+- Backport "LACP: check active partner sys id" (#1561939)
+
+* Sat Mar 17 2018 Aaron Conole <aconole@redhat.com> - 2.6.1-26.git20180130
+- Fix up the changelog (still part of #1557305)
+
+* Sat Mar 17 2018 Aaron Conole <aconole@redhat.com> - 2.6.1-25.git20180130
+- Revert DPDK to 16.11.4 (#1557305)
+
+* Fri Mar 16 2018 Aaron Conole <aconole@redhat.com> - 2.6.1-24.git20180130
+- fixes an accidental removal of patch file
+
+* Thu Mar 15 2018 Eelco Chaudron <echaudro@redhat.com> - 2.6.1-23.git20180130
+- fixes issues introduced by #1550124, 2.6.1-20.git20180130 (#1556662)
+
+* Tue Mar 13 2018 Kevin Traynor <ktraynor@redhat.com> - 2.6.1-22.git20180130
+- Update DPDK to 16.11.5 (#1553812)
+- DPDK 16.11.5 includes fix required for (#1450680) 
+
+* Thu Mar 08 2018 Eelco Chaudron <echaudro@redhat.com> - 2.6.1-21.git20180130
+- fixes i40e link status timeout trough direct register access
+
+* Tue Mar 06 2018 Flavio Leitner <fbl@redhat.com> - 2.6.1-20.git20180130
+- fixes for upcall_cb to replace ukeys for deleted flows (#1550124)
+
+* Tue Mar 06 2018 Flavio Leitner <fbl@redhat.com> - 2.6.1-19.git20180130
+- fixed backport to not send packets (#1549893)
+
+* Wed Jan 31 2018 Flavio Leitner <fbl@redhat.com> - 2.6.1-18.git20180130
+- Bump systemd timeout (#1540017)
+
+* Tue Jan 30 2018 Flavio Leitner <fbl@redhat.com> - 2.6.1-17.git20180130
+- Update to OVS 2.6.1 + branch-2.6 (#1540164)
+- Update DPDK to 16.11.4 + git (#1540175)
+- Backport to fix i40e maximum frame len (#1497963)
+- Backport to not send packets to down TAP devs (#1359854)
+
+* Thu Sep 07 2017 Kevin Traynor <ktraynor@redhat.com> - 2.6.1-16.git20161206
+- Backport of fix for i40e flow control get (#1475576) 
+
+* Mon Aug 28 2017 Aaron Conole <aconole@redhat.com> - 2.6.1-15.git20161206
+- Enable Cisco ENIC PMD (this is a reverse of the bug) (#1482679)
+
+* Tue Aug 22 2017 Aaron Conole <aconole@redhat.com> - 2.6.1-14.git20161206
+- Disable unsupported PMDs (#1482679)
+- software and hardware PMDs audited by the team
+
+* Mon Aug 07 2017 Timothy Redaelli <tredaelli@redhat.com> - 2.6.1-13.git20161206
+- Backport of enic driver crash fix (#1468631)
+
+* Mon Jul 24 2017 Timothy Redaelli <tredaelli@redhat.com> - 2.6.1-12.git20161206
 - Backport patch to fix random crashes when adding/removing interfaces (#1473735)
+
+* Tue Jul 18 2017 Timothy Redaelli <tredaelli@redhat.com> - 2.6.1-11.git20161206
 - Restart openvswitch service if a daemon crashes (#1468334)
+- Fix CVE-2017-9214: buffer overread in ofputil_pull_queue_get_config_reply10 (#1466570)
+- Fix CVE-2017-9263: Don't abort on unknown reason in role status message (#1466579)
+- Fix CVE-2017-9264: Fix checks for TCP, UDP, and IPv6 header sizes (#1466601)
+- Fix CVE-2017-9265: Check length of buckets in ofputil_pull_ofp15_group_mod() (#1467477)
 - Avoid segfault for vswitchd (#1472334)
 - Flush ports mdb when VLAN configuration changed (#1472335)
 - Make logs not readable by other (#1431490)

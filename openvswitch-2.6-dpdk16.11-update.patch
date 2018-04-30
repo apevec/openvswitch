@@ -1,132 +1,97 @@
-commit bc6e90b5cfa0b5db250ef88729cd40a722f1231f
-Author: Kevin Traynor <ktraynor@redhat.com>
-Date:   Tue Dec 6 16:37:24 2016 +0000
-
-    Backport of netdev-dpdk: Add support for DPDK 16.11
-    
-    Original does not apply on OVS 2.6 branch due to doc file changes.
-    
-    commit 04de404e1bfa63706237aa78ee065d67538f8fe9
-    Author: Ciara Loftus <ciara.loftus@intel.com>
-    Date:   Fri Nov 25 10:41:11 2016 +0000
-    
-        netdev-dpdk: Add support for DPDK 16.11
-    
-        This commit announces support for DPDK 16.11. Compatibility with DPDK
-        v16.07 is not broken yet thanks to only minor code changes being needed
-        for the upgrade.
-    
-        Signed-off-by: Ciara Loftus <ciara.loftus@intel.com>
-        Signed-off-by: Simon Horman <simon.horman@netronome.com>
-
-diff --git a/.travis/linux-build.sh b/.travis/linux-build.sh
-index 3bcec93..6fe663c 100755
---- a/.travis/linux-build.sh
-+++ b/.travis/linux-build.sh
-@@ -81,5 +81,5 @@ fi
- if [ "$DPDK" ]; then
-     if [ -z "$DPDK_VER" ]; then
--        DPDK_VER="16.07"
-+        DPDK_VER="16.11"
-     fi
-     install_dpdk $DPDK_VER
-diff --git a/INSTALL.DPDK-ADVANCED.md b/INSTALL.DPDK-ADVANCED.md
-index e3603a1..4f6e6df 100755
---- a/INSTALL.DPDK-ADVANCED.md
-+++ b/INSTALL.DPDK-ADVANCED.md
-@@ -47,5 +47,5 @@ for DPDK and OVS.
+diff -pur openvswitch-2.6.1.orig/INSTALL.DPDK-ADVANCED.md openvswitch-2.6.1/INSTALL.DPDK-ADVANCED.md
+--- openvswitch-2.6.1.orig/INSTALL.DPDK-ADVANCED.md	2018-01-30 11:54:32.166759873 -0200
++++ openvswitch-2.6.1/INSTALL.DPDK-ADVANCED.md	2018-01-30 11:56:51.294052763 -0200
+@@ -46,7 +46,7 @@ for DPDK and OVS.
+     For IVSHMEM case, set `export DPDK_TARGET=x86_64-ivshmem-linuxapp-gcc`
  
      ```
--    export DPDK_DIR=/usr/src/dpdk-16.07
-+    export DPDK_DIR=/usr/src/dpdk-16.11
+-    export DPDK_DIR=/usr/src/dpdk-stable-16.07.2
++    export DPDK_DIR=/usr/src/dpdk-stable-16.11
      export DPDK_BUILD=$DPDK_DIR/$DPDK_TARGET
      make install T=$DPDK_TARGET DESTDIR=install
-@@ -343,5 +343,5 @@ For users wanting to do packet forwarding using kernel stack below are the steps
+     ```
+@@ -342,7 +342,7 @@ For users wanting to do packet forwardin
+        cd /usr/src/cmdline_generator
         wget https://raw.githubusercontent.com/netgroup-polito/un-orchestrator/master/orchestrator/compute_controller/plugins/kvm-libvirt/cmdline_generator/cmdline_generator.c
         wget https://raw.githubusercontent.com/netgroup-polito/un-orchestrator/master/orchestrator/compute_controller/plugins/kvm-libvirt/cmdline_generator/Makefile
--       export RTE_SDK=/usr/src/dpdk-16.07
+-       export RTE_SDK=/usr/src/dpdk-stable-16.07.2
 +       export RTE_SDK=/usr/src/dpdk-16.11
         export RTE_TARGET=x86_64-ivshmem-linuxapp-gcc
         make
-@@ -367,5 +367,5 @@ For users wanting to do packet forwarding using kernel stack below are the steps
+        ./build/cmdline_generator -m -p dpdkr0 XXX
+@@ -366,7 +366,7 @@ For users wanting to do packet forwardin
+        mount -t hugetlbfs nodev /dev/hugepages (if not already mounted)
  
         # Build the DPDK ring application in the VM
--       export RTE_SDK=/root/dpdk-16.07
+-       export RTE_SDK=/root/dpdk-stable-16.07.2
 +       export RTE_SDK=/root/dpdk-16.11
         export RTE_TARGET=x86_64-ivshmem-linuxapp-gcc
         make
-diff --git a/INSTALL.DPDK.md b/INSTALL.DPDK.md
-index 30e9258..6462ab7 100644
---- a/INSTALL.DPDK.md
-+++ b/INSTALL.DPDK.md
-@@ -22,5 +22,5 @@ The DPDK support of Open vSwitch is considered 'experimental'.
+ 
+diff -pur openvswitch-2.6.1.orig/INSTALL.DPDK.md openvswitch-2.6.1/INSTALL.DPDK.md
+--- openvswitch-2.6.1.orig/INSTALL.DPDK.md	2018-01-30 11:54:32.166759873 -0200
++++ openvswitch-2.6.1/INSTALL.DPDK.md	2018-01-30 11:59:06.352249345 -0200
+@@ -21,7 +21,7 @@ The DPDK support of Open vSwitch is cons
+ 
  ### Prerequisites
  
--* Required: DPDK 16.07
+-* Required: DPDK 16.07.2
 +* Required: DPDK 16.11
  * Hardware: [DPDK Supported NICs] when physical ports in use
  
-@@ -43,8 +43,8 @@ advanced install guide [INSTALL.DPDK-ADVANCED.md]
+ ## <a name="build"></a> 2. Building and Installation
+@@ -42,9 +42,9 @@ advanced install guide [INSTALL.DPDK-ADV
+ 
       ```
       cd /usr/src/
--     wget http://dpdk.org/browse/dpdk/snapshot/dpdk-16.07.zip
--     unzip dpdk-16.07.zip
-+     wget http://dpdk.org/browse/dpdk/snapshot/dpdk-16.11.zip
-+     unzip dpdk-16.11.zip
- 
--     export DPDK_DIR=/usr/src/dpdk-16.07
+-     wget http://fast.dpdk.org/rel/dpdk-16.07.2.tar.xz
+-     tar xf dpdk-16.07.2.tar.xz
+-     export DPDK_DIR=/usr/src/dpdk-stable-16.07.2
++     wget http://fast.dpdk.org/rel/dpdk-16.11.tar.xz
++     tar xf dpdk-16.11.tar.xz
 +     export DPDK_DIR=/usr/src/dpdk-16.11
       cd $DPDK_DIR
       ```
-@@ -373,7 +373,7 @@ can be found in [Vhost Walkthrough].
+ 
+@@ -373,9 +373,9 @@ can be found in [Vhost Walkthrough].
+ 
    ```
    cd /root/dpdk/
--  wget http://dpdk.org/browse/dpdk/snapshot/dpdk-16.07.zip
--  unzip dpdk-16.07.zip
--  export DPDK_DIR=/root/dpdk/dpdk-16.07
-+  wget http://dpdk.org/browse/dpdk/snapshot/dpdk-16.11.zip
-+  unzip dpdk-16.11.zip
-+  export DPDK_DIR=/root/dpdk/dpdk-16.11
+-  wget http://fast.dpdk.org/rel/dpdk-16.07.2.tar.xz
+-  tar xf dpdk-16.07.2.tar.xz
+-  export DPDK_DIR=/usr/src/dpdk-stable-16.07.2
++  wget http://fast.dpdk.org/rel/dpdk-16.11.tar.xz
++  tar xf dpdk-16.11.tar.xz
++  export DPDK_DIR=/usr/src/dpdk-16.11
    export DPDK_TARGET=x86_64-native-linuxapp-gcc
    export DPDK_BUILD=$DPDK_DIR/$DPDK_TARGET
-@@ -531,5 +531,5 @@ can be found in [Vhost Walkthrough].
+   cd $DPDK_DIR
+@@ -531,7 +531,7 @@ can be found in [Vhost Walkthrough].
+            </disk>
             <disk type='dir' device='disk'>
               <driver name='qemu' type='fat'/>
--             <source dir='/usr/src/dpdk-16.07'/>
+-             <source dir='/usr/src/dpdk-stable-16.07.2'/>
 +             <source dir='/usr/src/dpdk-16.11'/>
               <target dev='vdb' bus='virtio'/>
               <readonly/>
-@@ -600,7 +600,7 @@ can be found in [Vhost Walkthrough].
+            </disk>
+@@ -600,9 +600,9 @@ can be found in [Vhost Walkthrough].
+     DPDK. It is recommended that users update Network Interface firmware to
      match what has been validated for the DPDK release.
  
--    For DPDK 16.07, the list of validated firmware versions can be found at:
+-    For DPDK 16.07.2, the list of validated firmware versions can be found at:
 +    For DPDK 16.11, the list of validated firmware versions can be found at:
  
--    http://dpdk.org/doc/guides/rel_notes/release_16.07.html
-+    http://dpdk.org/doc/guides/rel_notes/release_16_11.html
+-    http://dpdk.org/doc/guides-16.07/rel_notes/release_16_07.html
++    http://dpdk.org/doc/guides-16.11/rel_notes/release_16_11.html
  
- 
-diff --git a/NEWS b/NEWS
-index 9970297..0f4d6c3 100644
---- a/NEWS
-+++ b/NEWS
-@@ -3,9 +3,10 @@ v2.6.2 - xx xxx xxxx
- 
- 
--v2.6.1 - 01 Nov 2016
-+v2.6.1 - 06 Dec 2016
- ---------------------
-    - Fedora packaging:
-      * A package upgrade does not automatically restart OVS service.
-    - Bug fixes
-+   - Added support for DPDK 16.11
- 
- v2.6.0 - 27 Sep 2016
-diff --git a/lib/netdev-dpdk.c b/lib/netdev-dpdk.c
-index cc70607..3960665 100644
---- a/lib/netdev-dpdk.c
-+++ b/lib/netdev-dpdk.c
-@@ -2572,5 +2572,6 @@ dpdk_vhost_class_init(void)
+ Bug Reporting:
+ --------------
+diff -pur openvswitch-2.6.1.orig/lib/netdev-dpdk.c openvswitch-2.6.1/lib/netdev-dpdk.c
+--- openvswitch-2.6.1.orig/lib/netdev-dpdk.c	2018-01-30 11:54:32.187760370 -0200
++++ openvswitch-2.6.1/lib/netdev-dpdk.c	2018-01-30 12:12:41.598368241 -0200
+@@ -2571,7 +2571,8 @@ dpdk_vhost_class_init(void)
+     rte_vhost_driver_callback_register(&virtio_net_device_ops);
      rte_vhost_feature_disable(1ULL << VIRTIO_NET_F_HOST_TSO4
                              | 1ULL << VIRTIO_NET_F_HOST_TSO6
 -                            | 1ULL << VIRTIO_NET_F_CSUM);
@@ -134,3 +99,26 @@ index cc70607..3960665 100644
 +                            | 1ULL << VIRTIO_RING_F_INDIRECT_DESC);
  
      ovs_thread_create("vhost_thread", start_vhost_loop, NULL);
+     return 0;
+diff -pur openvswitch-2.6.1.orig/.travis/linux-build.sh openvswitch-2.6.1/.travis/linux-build.sh
+--- openvswitch-2.6.1.orig/.travis/linux-build.sh	2018-01-30 11:54:32.215761033 -0200
++++ openvswitch-2.6.1/.travis/linux-build.sh	2018-01-30 11:55:18.414854481 -0200
+@@ -80,7 +80,7 @@ fi
+ 
+ if [ "$DPDK" ]; then
+     if [ -z "$DPDK_VER" ]; then
+-        DPDK_VER="16.07.2"
++        DPDK_VER="16.11"
+     fi
+     install_dpdk $DPDK_VER
+     if [ "$CC" = "clang" ]; then
+--- openvswitch-2.6.1.orig/NEWS	2018-01-30 12:35:32.448448853 -0200
++++ openvswitch-2.6.1/NEWS	2018-01-30 12:38:55.866173685 -0200
+@@ -7,6 +7,7 @@ v2.6.1 - 01 Nov 2016
+    - Fedora packaging:
+      * A package upgrade does not automatically restart OVS service.
+    - Bug fixes
++   - Added support for DPDK 16.11
+ 
+ v2.6.0 - 27 Sep 2016
+ ---------------------

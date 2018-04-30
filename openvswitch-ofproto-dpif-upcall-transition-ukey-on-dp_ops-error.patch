@@ -1,0 +1,37 @@
+commit a1d6cce780d82fe7d2a1e394e127bd3335e247eb
+Author: Joe Stringer <joe@ovn.org>
+Date:   Wed Sep 6 15:12:52 2017 -0700
+
+    ofproto-dpif-upcall: Transition ukey on dp_ops error.
+    
+    In most situations, we don't expect that a flow we've successfully
+    dumped, which we intend to delete, cannot be deleted. However, to make
+    this code more resilient to ensure that ukeys *will* transition in all
+    cases (including an error at this stage), grab the lock and transition
+    this ukey forward to the evicted state, effectively treating a failure
+    to delete as "this flow is already gone".
+    
+    If we subsequently find out that it wasn't deleted, then that's ok - we
+    will re-dump, and validate at that stage, which should lead to creating
+    a new ukey or deleting the datapath flow when that happens.
+    
+    Signed-off-by: Joe Stringer <joe@ovn.org>
+    Signed-off-by: Ben Pfaff <blp@ovn.org>
+    Reviewed-by: Greg Rose <gvrose8192@gmail.com>
+
+diff --git a/ofproto/ofproto-dpif-upcall.c b/ofproto/ofproto-dpif-upcall.c
+index e52871da2..2deecae4b 100644
+--- a/ofproto/ofproto-dpif-upcall.c
++++ b/ofproto/ofproto-dpif-upcall.c
+@@ -2227,6 +2227,11 @@ push_dp_ops(struct udpif *udpif, struct ukey_op *ops, size_t n_ops)
+ 
+         if (op->dop.error) {
+             /* flow_del error, 'stats' is unusable. */
++            if (op->ukey) {
++                ovs_mutex_lock(&op->ukey->mutex);
++                transition_ukey(op->ukey, UKEY_EVICTED);
++                ovs_mutex_unlock(&op->ukey->mutex);
++            }
+             continue;
+         }
+ 

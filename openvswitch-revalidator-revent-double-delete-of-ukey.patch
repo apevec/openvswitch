@@ -1,0 +1,61 @@
+commit 154781666492011beacbc5d3822825ee163bc1e1
+Author: Joe Stringer <joe@ovn.org>
+Date:   Tue Jan 10 15:54:02 2017 -0800
+
+    revalidator: Prevent double-delete of ukey.
+    
+    revalidator_sweep__() splits checking for whether to delete a ukey from
+    the actual deletion to prevent taking the umap lock for too long.
+    However it uses information gathered from the first critical section to
+    decide to call ukey_delete() - ie, the second critical section.
+    
+    Since 67f08985d769 ("upcall: Replace ukeys for deleted flows."), it is
+    possible for a handler thread to receive an upcall for the same flow and
+    to replace the ukey which is being deleted with a new one, in between
+    these critical sections. This will remove the ukey from the cmap,
+    rcu-defer its deletion, and update the ukey state.
+    
+    If this occurs in between the critical sections of revalidator cleanup
+    of the flow, then the revalidator will subsequently call ukey_delete()
+    to delete the original ukey, which was already deleted by the handler
+    thread. This leads to a segfault in cmap_replace__().
+    
+    Guard against this by checking the ukey state in ukey_delete() while
+    holding the ukey lock.
+    
+    Backtrace:
+        Program terminated with signal 11, Segmentation fault.
+        #0  0x00007fe969b13da3 in cmap_replace__ ()
+        #1  0x00007fe969b14491 in cmap_replace ()
+        #2  0x00007fe969aee9ff in ukey_delete ()
+        #3  0x00007fe969aefd42 in revalidator_sweep__ ()
+        #4  0x00007fe969af1bad in udpif_revalidator ()
+        #5  0x00007fe969b8b2a6 in ovsthread_wrapper ()
+        #6  0x00007fe968e07dc5 in start_thread () from /lib64/libpthread.so.0
+        #7  0x00007fe96862c73d in clone () from /lib64/libc.so.6
+    
+    Fixes: 54ebeff4c03d ("upcall: Track ukey states.")
+    Fixes: 67f08985d769 ("upcall: Replace ukeys for deleted flows.")
+    Reported-by: Numan Siddique <nusiddiq@redhat.com>
+    Signed-off-by: Joe Stringer <joe@ovn.org>
+    Acked-by: Jarno Rajahalme <jarno@ovn.org>
+
+diff --git a/ofproto/ofproto-dpif-upcall.c b/ofproto/ofproto-dpif-upcall.c
+index cd2445fc4..1ffeaabf7 100644
+--- a/ofproto/ofproto-dpif-upcall.c
++++ b/ofproto/ofproto-dpif-upcall.c
+@@ -1794,9 +1794,11 @@ ukey_delete(struct umap *umap, struct udpif_key *ukey)
+     OVS_REQUIRES(umap->mutex)
+ {
+     ovs_mutex_lock(&ukey->mutex);
+-    cmap_remove(&umap->cmap, &ukey->cmap_node, ukey->hash);
+-    ovsrcu_postpone(ukey_delete__, ukey);
+-    transition_ukey(ukey, UKEY_DELETED);
++    if (ukey->state < UKEY_DELETED) {
++        cmap_remove(&umap->cmap, &ukey->cmap_node, ukey->hash);
++        ovsrcu_postpone(ukey_delete__, ukey);
++        transition_ukey(ukey, UKEY_DELETED);
++    }
+     ovs_mutex_unlock(&ukey->mutex);
+ }
+ 
