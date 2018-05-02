@@ -1,0 +1,111 @@
+From 4de6bb43520bb4ef7d5519fdce10b6f494af5552 Mon Sep 17 00:00:00 2001
+From: Flavio Leitner <fbl@sysclose.org>
+Date: Wed, 17 Jan 2018 22:09:58 -0200
+Subject: [PATCH] netdev-linux: do not send packets to down tap ifaces.
+
+Today OVS pushes packets to the TAP interface ignoring its
+current state. That works because the kernel will return -EIO
+when it's not UP and OVS will just ignore that as it is not
+an OVS issue.
+
+However, it causes a huge impact when broadcasts happen when
+using userspace datapath accelerated with DPDK (e.g.: action
+NORMAL).  This patch improves the situation by checking the
+TAP's interface state before issueing any syscall.
+
+However, there might be use-cases moving interfaces to other
+networking namespaces and in that case, OVS can't retrieve
+the iface state (sets it to DOWN). That would stop the traffic
+breaking the use-case. This patch relies on netlink notifications
+to find out if the device is local or not. When it's local, the
+device state is checked otherwise it will behave as before.
+
+Signed-off-by: Flavio Leitner <fbl@sysclose.org>
+Signed-off-by: Ben Pfaff <blp@ovn.org>
+
+diff -pur openvswitch-2.6.1.orig/lib/netdev-linux.c openvswitch-2.6.1.tap/lib/netdev-linux.c
+--- openvswitch-2.6.1.orig/lib/netdev-linux.c	2018-02-27 18:56:35.010275749 -0300
++++ openvswitch-2.6.1.tap/lib/netdev-linux.c	2018-02-27 18:56:15.492884183 -0300
+@@ -506,6 +506,8 @@ struct netdev_linux {
+ 
+     /* For devices of class netdev_tap_class only. */
+     int tap_fd;
++    bool present;               /* If the device is present in the namespace */
++    uint64_t tx_dropped;        /* tap device can drop if the iface is down */
+ };
+ 
+ struct netdev_rxq_linux {
+@@ -755,8 +757,10 @@ netdev_linux_update(struct netdev_linux
+             dev->ifindex = change->if_index;
+             dev->cache_valid |= VALID_IFINDEX;
+             dev->get_ifindex_error = 0;
++            dev->present = true;
+         } else {
+             netdev_linux_changed(dev, change->ifi_flags, 0);
++            dev->present = false;
+         }
+     } else if (rtnetlink_type_is_rtnlgrp_addr(change->nlmsg_type)) {
+         /* Invalidates in4, in6. */
+@@ -1248,7 +1252,18 @@ netdev_linux_send(struct netdev *netdev_
+              * because we attach a socket filter to the rx socket. */
+             struct netdev_linux *netdev = netdev_linux_cast(netdev_);
+ 
+-            retval = write(netdev->tap_fd, data, size);
++            /* The Linux tap driver returns EIO if the device is not up,
++             * so if the device is not up, don't waste time sending it.
++             * However, if the device is in another network namespace
++             * then OVS can't retrieve the state. In that case, send the
++             * packets anyway. */
++            if (netdev->present && !(netdev->ifi_flags & IFF_UP)) {
++                netdev->tx_dropped += (batch->count - i);
++                error = 0;
++                break;
++            } else {
++                retval = write(netdev->tap_fd, data, size);
++            }
+         }
+ 
+         if (retval < 0) {
+@@ -1804,6 +1819,7 @@ netdev_tap_get_stats(const struct netdev
+         stats->multicast           += dev_stats.multicast;
+         stats->collisions          += dev_stats.collisions;
+     }
++    stats->tx_dropped += netdev->tx_dropped;
+     ovs_mutex_unlock(&netdev->mutex);
+ 
+     return error;
+diff -pur openvswitch-2.6.1.orig/NEWS openvswitch-2.6.1.tap/NEWS
+--- openvswitch-2.6.1.orig/NEWS	2018-02-27 18:56:35.042276391 -0300
++++ openvswitch-2.6.1.tap/NEWS	2018-02-27 18:56:15.482883982 -0300
+@@ -8,6 +8,8 @@ v2.6.1 - 01 Nov 2016
+      * A package upgrade does not automatically restart OVS service.
+    - Bug fixes
+    - Added support for DPDK 16.11
++   - No longer send packets to the Linux TAP device if it's DOWN unless it is
++     in another networking namespace.
+    - OVN:
+      * IPAM now supports fixed MAC addresses.
+ 
+diff -pur openvswitch-2.6.1.orig/vswitchd/vswitch.xml openvswitch-2.6.1.tap/vswitchd/vswitch.xml
+--- openvswitch-2.6.1.orig/vswitchd/vswitch.xml	2018-02-27 18:56:35.028276110 -0300
++++ openvswitch-2.6.1.tap/vswitchd/vswitch.xml	2018-02-27 18:56:15.488884103 -0300
+@@ -1988,7 +1988,18 @@
+           imprecisely for internal interfaces.</dd>
+ 
+           <dt><code>tap</code></dt>
+-          <dd>A TUN/TAP device managed by Open vSwitch.</dd>
++          <dd>
++            <p>
++              A TUN/TAP device managed by Open vSwitch.
++            </p>
++            <p>
++              Open vSwitch checks the interface state before send packets
++              to the device.  When it is <code>down</code>, the packets are
++              dropped and the tx_dropped statistic is updated accordingly.
++              Older versions of Open vSwitch did not check the interface state
++              and then the tx_packets was incremented along with tx_dropped.
++            </p>
++          </dd>
+ 
+           <dt><code>geneve</code></dt>
+           <dd>

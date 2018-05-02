@@ -1,0 +1,58 @@
+From 23276f022a3e3aaa73033c586bb66bf3c3b1b91e Mon Sep 17 00:00:00 2001
+From: Maxime Coquelin <maxime.coquelin@redhat.com>
+Date: Wed, 28 Mar 2018 21:51:35 +0200
+Subject: [PATCH] vhost-user: fix deadlock in case of NUMA realloc
+
+Virtqueue's access lock was recently introduced to protect
+the device against async changes.
+
+One problem with the v16.11 backport is that in case of NUMA
+reallocation, the device gets stuck because the old access_lock
+gets unlocked instead of its reallocated copy. On the next
+vhost-user message received, the thread keeps spinning on the
+lock, as it will never be unlocked.
+
+Fixes: ce3b23dc9296 ("vhost: protect active rings from async ring changes")
+
+Cc: stable@dpdk.org
+
+Tested-by: Kevin Traynor <ktraynor@redhat.com>
+Reviewed-by: Kevin Traynor <ktraynor@redhat.com>
+Signed-off-by: Maxime Coquelin <maxime.coquelin@redhat.com>
+Acked-by: Luca Boccassi <bluca@debian.org>
+---
+ lib/librte_vhost/vhost_user.c | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/lib/librte_vhost/vhost_user.c b/lib/librte_vhost/vhost_user.c
+index 80348db..94a48a4 100644
+--- a/lib/librte_vhost/vhost_user.c
++++ b/lib/librte_vhost/vhost_user.c
+@@ -328,7 +328,9 @@
+  */
+ static int
+-vhost_user_set_vring_addr(struct virtio_net *dev, struct vhost_vring_addr *addr)
++vhost_user_set_vring_addr(struct virtio_net **pdev,
++						  struct vhost_vring_addr *addr)
+ {
+ 	struct vhost_virtqueue *vq;
++	struct virtio_net *dev = *pdev;
+ 
+ 	if (dev->mem == NULL)
+@@ -349,4 +351,6 @@
+ 
+ 	dev = numa_realloc(dev, addr->index);
++	*pdev = dev;
++
+ 	vq = dev->virtqueue[addr->index];
+ 
+@@ -1093,5 +1097,5 @@
+ 		break;
+ 	case VHOST_USER_SET_VRING_ADDR:
+-		vhost_user_set_vring_addr(dev, &msg.payload.addr);
++		vhost_user_set_vring_addr(&dev, &msg.payload.addr);
+ 		break;
+ 	case VHOST_USER_SET_VRING_BASE:
+-- 
+1.8.3.1
+

@@ -1,0 +1,37 @@
+commit c1c69e8a45ead25f4309ec3d340c805a10bcae79
+Author: aaron conole <aconole@redhat.com>
+Date:   Thu Jul 13 10:51:34 2017 -0400
+
+    rhel/systemd: Set ovs-vswitchd timeout to 5 minutes
+    
+    During initialization, it's possible that the startup time takes longer
+    than the systemd default provided.  Set this to be 5 minutes.  If we
+    take longer than 5 minutes, maybe something is wrong.
+    
+    As an example of long initialization, enable DPDK, and allocate large
+    numbers of hugepages before starting ovs-vswitchd.  The vswitchd can
+    take two or more minutes to start.  During that time, systemd will decide
+    that the startup time took too long, and kill the parent process, leading
+    eventually to an error like:
+       ovs|00011|daemon_unix|EMER|pipe write failed (Broken pipe)
+    
+    And a systemd log like:
+       ovs-vswitchd.service start operation timed out. Terminating.
+    
+    The 5 minutes setting has been observed to work on a system where 400G
+    of hugepages were allocated.
+    
+    Signed-off-by: Aaron Conole <aconole@redhat.com>
+    Acked-by: Markos Chandras <mchandras@suse.de>
+    Acked-by: Timothy Redaelli <tredaelli@redhat.com>
+    Signed-off-by: Russell Bryant <russell@ovn.org>
+
+diff --git a/rhel/usr_lib_systemd_system_ovs-vswitchd.service b/rhel/usr_lib_systemd_system_ovs-vswitchd.service
+index 22a4c63d6..886b68a50 100644
+--- a/rhel/usr_lib_systemd_system_ovs-vswitchd.service
++++ b/rhel/usr_lib_systemd_system_ovs-vswitchd.service
+@@ -18,3 +18,4 @@ ExecStop=/usr/share/openvswitch/scripts/ovs-ctl --no-ovsdb-server stop
+ ExecReload=/usr/share/openvswitch/scripts/ovs-ctl --no-ovsdb-server \
+           --no-monitor --system-id=random \
+           restart $OPTIONS
++TimeoutSec=300

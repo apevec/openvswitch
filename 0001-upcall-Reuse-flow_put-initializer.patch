@@ -1,0 +1,73 @@
+From c9838dac83cb61594ef08ef48bda69e3f9ed8858 Mon Sep 17 00:00:00 2001
+From: Joe Stringer <joe@ovn.org>
+Date: Wed, 31 Aug 2016 11:06:02 -0700
+Subject: [PATCH 1/4] upcall: Reuse flow_put initializer.
+
+Signed-off-by: Joe Stringer <joe@ovn.org>
+Acked-by: Jarno Rajahalme <jarno@ovn.org>
+---
+ ofproto/ofproto-dpif-upcall.c | 24 ++++++++----------------
+ 1 file changed, 8 insertions(+), 16 deletions(-)
+
+diff --git a/ofproto/ofproto-dpif-upcall.c b/ofproto/ofproto-dpif-upcall.c
+index 45e8eb304..73953fa8d 100644
+--- a/ofproto/ofproto-dpif-upcall.c
++++ b/ofproto/ofproto-dpif-upcall.c
+@@ -347,6 +347,9 @@ static void ukey_delete(struct umap *, struct udpif_key *);
+ static enum upcall_type classify_upcall(enum dpif_upcall_type type,
+                                         const struct nlattr *userdata);
+ 
++static void put_op_init(struct ukey_op *op, struct udpif_key *ukey,
++                        enum dpif_flow_put_flags flags);
++
+ static int upcall_receive(struct upcall *, const struct dpif_backer *,
+                           const struct dp_packet *packet, enum dpif_upcall_type,
+                           const struct nlattr *userdata, const struct flow *,
+@@ -1350,19 +1353,7 @@ handle_upcalls(struct udpif *udpif, struct upcall *upcalls,
+             struct udpif_key *ukey = upcall->ukey;
+ 
+             upcall->ukey_persists = true;
+-            op = &ops[n_ops++];
+-
+-            op->ukey = ukey;
+-            op->dop.type = DPIF_OP_FLOW_PUT;
+-            op->dop.u.flow_put.flags = DPIF_FP_CREATE;
+-            op->dop.u.flow_put.key = ukey->key;
+-            op->dop.u.flow_put.key_len = ukey->key_len;
+-            op->dop.u.flow_put.mask = ukey->mask;
+-            op->dop.u.flow_put.mask_len = ukey->mask_len;
+-            op->dop.u.flow_put.ufid = upcall->ufid;
+-            op->dop.u.flow_put.stats = NULL;
+-            ukey_get_actions(ukey, &op->dop.u.flow_put.actions,
+-                             &op->dop.u.flow_put.actions_len);
++            put_op_init(&ops[n_ops++], ukey, DPIF_FP_CREATE);
+         }
+ 
+         if (upcall->odp_actions.size) {
+@@ -1951,11 +1942,12 @@ delete_op_init(struct udpif *udpif, struct ukey_op *op, struct udpif_key *ukey)
+ }
+ 
+ static void
+-modify_op_init(struct ukey_op *op, struct udpif_key *ukey)
++put_op_init(struct ukey_op *op, struct udpif_key *ukey,
++            enum dpif_flow_put_flags flags)
+ {
+     op->ukey = ukey;
+     op->dop.type = DPIF_OP_FLOW_PUT;
+-    op->dop.u.flow_put.flags = DPIF_FP_MODIFY;
++    op->dop.u.flow_put.flags = flags;
+     op->dop.u.flow_put.key = ukey->key;
+     op->dop.u.flow_put.key_len = ukey->key_len;
+     op->dop.u.flow_put.mask = ukey->mask;
+@@ -2100,7 +2092,7 @@ reval_op_init(struct ukey_op *op, enum reval_result result,
+         /* ukey->key_recirc_id remains, as the key is the same as before. */
+ 
+         ukey_set_actions(ukey, odp_actions);
+-        modify_op_init(op, ukey);
++        put_op_init(op, ukey, DPIF_FP_MODIFY);
+     }
+ }
+ 
+-- 
+2.14.3
+

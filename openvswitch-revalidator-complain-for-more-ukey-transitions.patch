@@ -1,0 +1,30 @@
+commit 353fe1e149c631a35f1142fcb97f7d7edcd4c448
+Author: Joe Stringer <joe@ovn.org>
+Date:   Tue Jan 10 15:54:03 2017 -0800
+
+    revalidator: Complain for more ukey transitions.
+    
+    For most ukey transition states, only one thread should be responsible
+    for transitioning the ukey into the new state. If another thread
+    attempts to transition the ukey into the same state (for instance,
+    evicting the datapath flow or deleting the ukey), then it is likely
+    performing additional work which should only happen once. Log all cases
+    of ukey transition into the current state, except for UKEY_OPERATIONAL
+    -> UKEY_OPERATIONAL which regularly occurs when revalidating ukeys.
+    
+    Signed-off-by: Joe Stringer <joe@ovn.org>
+    Acked-by: Jarno Rajahalme <jarno@ovn.org>
+
+diff --git a/ofproto/ofproto-dpif-upcall.c b/ofproto/ofproto-dpif-upcall.c
+index 1ffeaabf7..660383fae 100644
+--- a/ofproto/ofproto-dpif-upcall.c
++++ b/ofproto/ofproto-dpif-upcall.c
+@@ -1672,7 +1672,7 @@ transition_ukey(struct udpif_key *ukey, enum ukey_state dst)
+     OVS_REQUIRES(ukey->mutex)
+ {
+     ovs_assert(dst >= ukey->state);
+-    if (ukey->state == dst) {
++    if (ukey->state == dst && dst == UKEY_OPERATIONAL) {
+         return;
+     }
+ 
