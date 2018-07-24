@@ -65,7 +65,11 @@ Source: http://openvswitch.org/releases/%{name}-%{version}.tar.gz
 # The DPDK is designed to optimize througput of network traffic using, among
 # other techniques, carefully crafted assembly instructions.  As such it
 # needs extensive work to port it to other architectures.
-ExclusiveArch: x86_64 aarch64 ppc64le s390x
+#ExclusiveArch: x86_64 aarch64 ppc64le s390x
+
+# FIXME x86_64 only for OVS 2.9.2 update until multiarch issues
+# are resolved, see https://review.rdoproject.org/r/13839
+ExclusiveArch: x86_64
 
 # ovs-patches
 
