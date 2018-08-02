@@ -46,7 +46,7 @@ URL: http://www.openvswitch.org/
 # Carried over from 2.6.1 CBS builds, introduced to win over 2.6.90
 Epoch:   1
 Version: 2.9.2
-Release: 1%{?commit0:.%{date}git%{shortcommit0}}%{?dist}
+Release: 2%{?commit0:.%{date}git%{shortcommit0}}%{?dist}
 
 # Nearly all of openvswitch is ASL 2.0.  The bugtool is LGPLv2+, and the
 # lib/sflow*.[ch] files are SISSL
@@ -65,11 +65,7 @@ Source: http://openvswitch.org/releases/%{name}-%{version}.tar.gz
 # The DPDK is designed to optimize througput of network traffic using, among
 # other techniques, carefully crafted assembly instructions.  As such it
 # needs extensive work to port it to other architectures.
-#ExclusiveArch: x86_64 aarch64 ppc64le s390x
-
-# FIXME x86_64 only for OVS 2.9.2 update until multiarch issues
-# are resolved, see https://review.rdoproject.org/r/13839
-ExclusiveArch: x86_64
+ExclusiveArch: x86_64 aarch64 ppc64le s390x
 
 # ovs-patches
 
