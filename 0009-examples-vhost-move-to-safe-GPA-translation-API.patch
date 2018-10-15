@@ -1,0 +1,192 @@
+From cbf70816520746639e6db436f356ba0cd36e0bb3 Mon Sep 17 00:00:00 2001
+From: Maxime Coquelin <maxime.coquelin@redhat.com>
+Date: Mon, 23 Apr 2018 11:33:46 +0200
+Subject: [PATCH 09/11] examples/vhost: move to safe GPA translation API
+
+This patch uses the new rte_vhost_va_from_guest_pa() API
+to ensure the application doesn't perform out-of-bound
+accesses either because of a malicious guest providing an
+incorrect descriptor length, or because the buffer is
+contiguous in guest physical address space but not in the
+host process virtual address space.
+
+This issue has been assigned CVE-2018-1059.
+
+Signed-off-by: Maxime Coquelin <maxime.coquelin@redhat.com>
+---
+ examples/vhost/virtio_net.c | 94 +++++++++++++++++++++++++++++++++++++++------
+ 1 file changed, 83 insertions(+), 11 deletions(-)
+
+diff --git a/dpdk-17.11/examples/vhost/virtio_net.c b/dpdk-17.11/examples/vhost/virtio_net.c
+index 1ab57f5..31c3dd0 100644
+--- a/dpdk-17.11/examples/vhost/virtio_net.c
++++ b/dpdk-17.11/examples/vhost/virtio_net.c
+@@ -86,8 +86,9 @@
+ {
+ 	uint32_t desc_avail, desc_offset;
++	uint64_t desc_chunck_len;
+ 	uint32_t mbuf_avail, mbuf_offset;
+ 	uint32_t cpy_len;
+ 	struct vring_desc *desc;
+-	uint64_t desc_addr;
++	uint64_t desc_addr, desc_gaddr;
+ 	struct virtio_net_hdr virtio_hdr = {0, 0, 0, 0, 0, 0};
+ 	/* A counter to avoid desc dead loop chain */
+@@ -95,5 +96,8 @@
+ 
+ 	desc = &vr->desc[desc_idx];
+-	desc_addr = rte_vhost_gpa_to_vva(dev->mem, desc->addr);
++	desc_chunck_len = desc->len;
++	desc_gaddr = desc->addr;
++	desc_addr = rte_vhost_va_from_guest_pa(
++			dev->mem, desc_gaddr, &desc_chunck_len);
+ 	/*
+ 	 * Checking of 'desc_addr' placed outside of 'unlikely' macro to avoid
+@@ -107,7 +111,40 @@
+ 
+ 	/* write virtio-net header */
+-	*(struct virtio_net_hdr *)(uintptr_t)desc_addr = virtio_hdr;
++	if (likely(desc_chunck_len >= dev->hdr_len)) {
++		*(struct virtio_net_hdr *)(uintptr_t)desc_addr = virtio_hdr;
++		desc_offset = dev->hdr_len;
++	} else {
++		uint64_t len;
++		uint64_t remain = dev->hdr_len;
++		uint64_t src = (uint64_t)(uintptr_t)&virtio_hdr, dst;
++		uint64_t guest_addr = desc_gaddr;
++
++		while (remain) {
++			len = remain;
++			dst = rte_vhost_va_from_guest_pa(dev->mem,
++					guest_addr, &len);
++			if (unlikely(!dst || !len))
++				return -1;
++
++			rte_memcpy((void *)(uintptr_t)dst,
++					(void *)(uintptr_t)src,
++					len);
++
++			remain -= len;
++			guest_addr += len;
++			dst += len;
++		}
++
++		desc_chunck_len = desc->len - dev->hdr_len;
++		desc_gaddr += dev->hdr_len;
++		desc_addr = rte_vhost_va_from_guest_pa(
++				dev->mem, desc_gaddr,
++				&desc_chunck_len);
++		if (unlikely(!desc_addr))
++			return -1;
++
++		desc_offset = 0;
++	}
+ 
+-	desc_offset = dev->hdr_len;
+ 	desc_avail  = desc->len - dev->hdr_len;
+ 
+@@ -134,5 +171,8 @@
+ 
+ 			desc = &vr->desc[desc->next];
+-			desc_addr = rte_vhost_gpa_to_vva(dev->mem, desc->addr);
++			desc_chunck_len = desc->len;
++			desc_gaddr = desc->addr;
++			desc_addr = rte_vhost_va_from_guest_pa(
++					dev->mem, desc_gaddr, &desc_chunck_len);
+ 			if (unlikely(!desc_addr))
+ 				return -1;
+@@ -140,7 +180,17 @@
+ 			desc_offset = 0;
+ 			desc_avail  = desc->len;
++		} else if (unlikely(desc_chunck_len == 0)) {
++			desc_chunck_len = desc_avail;
++			desc_gaddr += desc_offset;
++			desc_addr = rte_vhost_va_from_guest_pa(dev->mem,
++					desc_gaddr,
++					&desc_chunck_len);
++			if (unlikely(!desc_addr))
++				return -1;
++
++			desc_offset = 0;
+ 		}
+ 
+-		cpy_len = RTE_MIN(desc_avail, mbuf_avail);
++		cpy_len = RTE_MIN(desc_chunck_len, mbuf_avail);
+ 		rte_memcpy((void *)((uintptr_t)(desc_addr + desc_offset)),
+ 			rte_pktmbuf_mtod_offset(m, void *, mbuf_offset),
+@@ -151,4 +201,5 @@
+ 		desc_avail  -= cpy_len;
+ 		desc_offset += cpy_len;
++		desc_chunck_len -= cpy_len;
+ 	}
+ 
+@@ -224,6 +275,7 @@
+ {
+ 	struct vring_desc *desc;
+-	uint64_t desc_addr;
++	uint64_t desc_addr, desc_gaddr;
+ 	uint32_t desc_avail, desc_offset;
++	uint64_t desc_chunck_len;
+ 	uint32_t mbuf_avail, mbuf_offset;
+ 	uint32_t cpy_len;
+@@ -237,5 +289,8 @@
+ 		return -1;
+ 
+-	desc_addr = rte_vhost_gpa_to_vva(dev->mem, desc->addr);
++	desc_chunck_len = desc->len;
++	desc_gaddr = desc->addr;
++	desc_addr = rte_vhost_va_from_guest_pa(
++			dev->mem, desc_gaddr, &desc_chunck_len);
+ 	if (unlikely(!desc_addr))
+ 		return -1;
+@@ -251,5 +306,8 @@
+ 	 */
+ 	desc = &vr->desc[desc->next];
+-	desc_addr = rte_vhost_gpa_to_vva(dev->mem, desc->addr);
++	desc_chunck_len = desc->len;
++	desc_gaddr = desc->addr;
++	desc_addr = rte_vhost_va_from_guest_pa(
++			dev->mem, desc_gaddr, &desc_chunck_len);
+ 	if (unlikely(!desc_addr))
+ 		return -1;
+@@ -263,5 +321,5 @@
+ 	mbuf_avail  = m->buf_len - RTE_PKTMBUF_HEADROOM;
+ 	while (1) {
+-		cpy_len = RTE_MIN(desc_avail, mbuf_avail);
++		cpy_len = RTE_MIN(desc_chunck_len, mbuf_avail);
+ 		rte_memcpy(rte_pktmbuf_mtod_offset(cur, void *,
+ 						   mbuf_offset),
+@@ -273,4 +331,5 @@
+ 		desc_avail  -= cpy_len;
+ 		desc_offset += cpy_len;
++		desc_chunck_len -= cpy_len;
+ 
+ 		/* This desc reaches to its end, get the next one */
+@@ -284,5 +343,8 @@
+ 			desc = &vr->desc[desc->next];
+ 
+-			desc_addr = rte_vhost_gpa_to_vva(dev->mem, desc->addr);
++			desc_chunck_len = desc->len;
++			desc_gaddr = desc->addr;
++			desc_addr = rte_vhost_va_from_guest_pa(
++					dev->mem, desc_gaddr, &desc_chunck_len);
+ 			if (unlikely(!desc_addr))
+ 				return -1;
+@@ -291,4 +353,14 @@
+ 			desc_offset = 0;
+ 			desc_avail  = desc->len;
++		} else if (unlikely(desc_chunck_len == 0)) {
++			desc_chunck_len = desc_avail;
++			desc_gaddr += desc_offset;
++			desc_addr = rte_vhost_va_from_guest_pa(dev->mem,
++					desc_gaddr,
++					&desc_chunck_len);
++			if (unlikely(!desc_addr))
++				return -1;
++
++			desc_offset = 0;
+ 		}
+ 
+-- 
+1.8.3.1
+

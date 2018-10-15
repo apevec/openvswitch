@@ -1,0 +1,39 @@
+From 7bbc2e1def616477ce97821de930eca15896b7bc Mon Sep 17 00:00:00 2001
+From: Timothy Redaelli <tredaelli@redhat.com>
+Date: Thu, 17 May 2018 18:45:01 +0200
+Subject: [PATCH] netdev-dpdk: fix check for "net_nfp" driver
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Currently the check of "net_nfp" driver while enabling scatter compares
+only the first 6 bytes, but "net_nfp" is 7 bytes long.
+
+This change fixes the check by comparing the first 7 bytes.
+
+CC: Pablo Cascón <pablo.cascon@netronome.com>
+CC: Simon Horman <simon.horman@netronome.com>
+Fixes: 65a87968f4cf ("netdev-dpdk: don't enable scatter for jumbo RX support for nfp")
+Signed-off-by: Timothy Redaelli <tredaelli@redhat.com>
+Acked-by: Pablo Cascón <pablo.cascon@netronome.com>
+Signed-off-by: Ian Stokes <ian.stokes@intel.com>
+---
+ lib/netdev-dpdk.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/lib/netdev-dpdk.c b/lib/netdev-dpdk.c
+index 8ced8cc29..2e2f568b8 100644
+--- a/lib/netdev-dpdk.c
++++ b/lib/netdev-dpdk.c
+@@ -788,7 +788,7 @@ dpdk_eth_dev_port_config(struct netdev_dpdk *dev, int n_rxq, int n_txq)
+      * than highlighting the one known not to need scatter */
+     if (dev->mtu > ETHER_MTU) {
+         rte_eth_dev_info_get(dev->port_id, &info);
+-        if (strncmp(info.driver_name, "net_nfp", 6)) {
++        if (strncmp(info.driver_name, "net_nfp", 7)) {
+             conf.rxmode.enable_scatter = 1;
+         }
+     }
+-- 
+2.17.0
+

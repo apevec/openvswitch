@@ -1,0 +1,49 @@
+From 651f3d4d0f1329b1dcf933e6dc207be44ef51d01 Mon Sep 17 00:00:00 2001
+From: Rasesh Mody <rasesh.mody@cavium.com>
+Date: Fri, 2 Feb 2018 22:03:18 -0800
+Subject: [PATCH] net/qede: fix few log messages
+
+Fixes: 9e334305178f ("net/qede: fix MTU set and max Rx length")
+Fixes: 22d07d939c3c ("net/qede/base: update")
+Cc: stable@dpdk.org
+
+Signed-off-by: Rasesh Mody <rasesh.mody@cavium.com>
+---
+ drivers/net/qede/base/ecore_dcbx.c | 7 +++----
+ drivers/net/qede/qede_rxtx.c       | 2 +-
+ 2 files changed, 4 insertions(+), 5 deletions(-)
+
+diff --git a/dpdk-17.11/drivers/net/qede/base/ecore_dcbx.c b/drivers/net/qede/base/ecore_dcbx.c
+index 632297a78..21ddda92e 100644
+--- a/dpdk-17.11/drivers/net/qede/base/ecore_dcbx.c
++++ b/dpdk-17.11/drivers/net/qede/base/ecore_dcbx.c
+@@ -216,10 +216,9 @@ ecore_dcbx_get_app_protocol_type(struct ecore_hwfn *p_hwfn,
+ 		*type = DCBX_PROTOCOL_ETH;
+ 	} else {
+ 		*type = DCBX_MAX_PROTOCOL_TYPE;
+-		DP_ERR(p_hwfn,
+-		       "No action required, App TLV id = 0x%x"
+-		       " app_prio_bitmap = 0x%x\n",
+-		       id, app_prio_bitmap);
++		DP_VERBOSE(p_hwfn, ECORE_MSG_DCB,
++			    "No action required, App TLV entry = 0x%x\n",
++			   app_prio_bitmap);
+ 		return false;
+ 	}
+ 
+diff --git a/dpdk-17.11/drivers/net/qede/qede_rxtx.c b/drivers/net/qede/qede_rxtx.c
+index 169ede83a..0de7c6b8a 100644
+--- a/dpdk-17.11/drivers/net/qede/qede_rxtx.c
++++ b/dpdk-17.11/drivers/net/qede/qede_rxtx.c
+@@ -158,7 +158,7 @@ qede_rx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
+ 	qdev->fp_array[queue_idx].rxq = rxq;
+ 
+ 	DP_INFO(edev, "rxq %d num_desc %u rx_buf_size=%u socket %u\n",
+-		  queue_idx, nb_desc, qdev->mtu, socket_id);
++		  queue_idx, nb_desc, rxq->rx_buf_size, socket_id);
+ 
+ 	return 0;
+ }
+-- 
+2.14.3
+

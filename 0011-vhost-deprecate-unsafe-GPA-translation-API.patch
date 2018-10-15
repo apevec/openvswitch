@@ -1,0 +1,40 @@
+From e4866aa27a33c6354c7086e608c0625a8c1a1ecc Mon Sep 17 00:00:00 2001
+From: Maxime Coquelin <maxime.coquelin@redhat.com>
+Date: Mon, 23 Apr 2018 11:33:48 +0200
+Subject: [PATCH 11/11] vhost: deprecate unsafe GPA translation API
+
+This patch marks rte_vhost_gpa_to_vva() as deprecated because
+it is unsafe. Application relying on this API should move
+to the new rte_vhost_va_from_guest_pa() API, and check
+returned length to avoid out-of-bound accesses.
+
+This issue has been assigned CVE-2018-1059.
+
+Signed-off-by: Maxime Coquelin <maxime.coquelin@redhat.com>
+---
+ lib/librte_vhost/rte_vhost.h | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/dpdk-17.11/lib/librte_vhost/rte_vhost.h b/dpdk-17.11/lib/librte_vhost/rte_vhost.h
+index f2d6c95..3fc6034 100644
+--- a/dpdk-17.11/lib/librte_vhost/rte_vhost.h
++++ b/dpdk-17.11/lib/librte_vhost/rte_vhost.h
+@@ -118,4 +118,9 @@ struct vhost_device_ops {
+  * Convert guest physical address to host virtual address
+  *
++ * This function is deprecated because unsafe.
++ * New rte_vhost_va_from_guest_pa() should be used instead to ensure
++ * guest physical ranges are fully and contiguously mapped into
++ * process virtual address space.
++ *
+  * @param mem
+  *  the guest memory regions
+@@ -125,4 +130,5 @@ struct vhost_device_ops {
+  *  the host virtual address on success, 0 on failure
+  */
++__rte_deprecated
+ static __rte_always_inline uint64_t
+ rte_vhost_gpa_to_vva(struct rte_vhost_memory *mem, uint64_t gpa)
+-- 
+1.8.3.1
+

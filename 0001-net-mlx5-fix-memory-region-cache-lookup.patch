@@ -1,0 +1,37 @@
+From 95086c654322861a10f9835233a333d7c2188df3 Mon Sep 17 00:00:00 2001
+From: Shahaf Shuler <shahafs@mellanox.com>
+Date: Thu, 25 Jan 2018 18:17:58 +0200
+Subject: [PATCH] net/mlx5: fix memory region cache lookup
+
+The Memory Region (MR) cache contains pointers to mlx5_mr.
+The MR cache indexes are filled when a new MR is created. As it is
+possible for MR to be created on the flight, an extra validation must be
+added to avoid segmentation fault.
+
+Fixes: b0b093845793 ("net/mlx5: use buffer address for LKEY search")
+Cc: stable@dpdk.org
+
+Signed-off-by: Xueming Li <xuemingl@mellanox.com>
+Signed-off-by: Shahaf Shuler <shahafs@mellanox.com>
+Acked-by: Nelio Laranjeiro <nelio.laranjeiro@6wind.com>
+---
+ drivers/net/mlx5/mlx5_rxtx.h | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/dpdk-17.11/drivers/net/mlx5/mlx5_rxtx.h b/dpdk-17.11/drivers/net/mlx5/mlx5_rxtx.h
+index 9d9844365..f92eb33fb 100644
+--- a/dpdk-17.11/drivers/net/mlx5/mlx5_rxtx.h
++++ b/dpdk-17.11/drivers/net/mlx5/mlx5_rxtx.h
+@@ -555,7 +555,8 @@ mlx5_tx_mb2mr(struct mlx5_txq_data *txq, struct rte_mbuf *mb)
+ 	if (likely(txq->mp2mr[i]->start <= addr && txq->mp2mr[i]->end >= addr))
+ 		return txq->mp2mr[i]->lkey;
+ 	for (i = 0; (i != RTE_DIM(txq->mp2mr)); ++i) {
+-		if (unlikely(txq->mp2mr[i]->mr == NULL)) {
++		if (unlikely(txq->mp2mr[i] == NULL ||
++		    txq->mp2mr[i]->mr == NULL)) {
+ 			/* Unknown MP, add a new MR for it. */
+ 			break;
+ 		}
+-- 
+2.14.3
+

@@ -1,0 +1,212 @@
+From 93f522ef2aa3e61bd44d374c5fb92ede0ac1b58f Mon Sep 17 00:00:00 2001
+From: Maxime Coquelin <maxime.coquelin@redhat.com>
+Date: Mon, 23 Apr 2018 11:33:45 +0200
+Subject: [PATCH 08/11] vhost: handle virtually non-contiguous buffers in
+ Rx-mrg
+
+This patch enables the handling of buffers non-contiguous in
+process virtual address space in the enqueue path when mergeable
+buffers are used.
+
+When virtio-net header doesn't fit in a single chunck, it is
+computed in a local variable and copied to the buffer chuncks
+afterwards.
+
+For packet content, the copy length is limited to the chunck
+size, next chuncks VAs being fetched afterward.
+
+This issue has been assigned CVE-2018-1059.
+
+Signed-off-by: Maxime Coquelin <maxime.coquelin@redhat.com>
+---
+ lib/librte_vhost/virtio_net.c | 115 ++++++++++++++++++++++++++++++++----------
+ 1 file changed, 87 insertions(+), 28 deletions(-)
+
+diff --git a/dpdk-17.11/lib/librte_vhost/virtio_net.c b/dpdk-17.11/lib/librte_vhost/virtio_net.c
+index 5bd4e58..a013c07 100644
+--- a/dpdk-17.11/lib/librte_vhost/virtio_net.c
++++ b/dpdk-17.11/lib/librte_vhost/virtio_net.c
+@@ -669,12 +669,13 @@
+ {
+ 	uint32_t vec_idx = 0;
+-	uint64_t desc_addr;
++	uint64_t desc_addr, desc_gaddr;
+ 	uint32_t mbuf_offset, mbuf_avail;
+ 	uint32_t desc_offset, desc_avail;
+ 	uint32_t cpy_len;
+-	uint64_t dlen;
++	uint64_t desc_chunck_len;
+ 	uint64_t hdr_addr, hdr_phys_addr;
+ 	struct rte_mbuf *hdr_mbuf;
+ 	struct batch_copy_elem *batch_copy = vq->batch_copy_elems;
++	struct virtio_net_hdr_mrg_rxbuf tmp_hdr, *hdr = NULL;
+ 	uint16_t copy_nb = vq->batch_copy_nb_elems;
+ 	int error = 0;
+@@ -685,10 +686,11 @@
+ 	}
+ 
+-	dlen = buf_vec[vec_idx].buf_len;
+-	desc_addr = vhost_iova_to_vva(dev, vq, buf_vec[vec_idx].buf_addr,
+-						&dlen, VHOST_ACCESS_RW);
+-	if (dlen != buf_vec[vec_idx].buf_len ||
+-			buf_vec[vec_idx].buf_len < dev->vhost_hlen ||
+-			!desc_addr) {
++	desc_chunck_len = buf_vec[vec_idx].buf_len;
++	desc_gaddr = buf_vec[vec_idx].buf_addr;
++	desc_addr = vhost_iova_to_vva(dev, vq,
++					desc_gaddr,
++					&desc_chunck_len,
++					VHOST_ACCESS_RW);
++	if (buf_vec[vec_idx].buf_len < dev->vhost_hlen || !desc_addr) {
+ 		error = -1;
+ 		goto out;
+@@ -697,5 +699,9 @@
+ 	hdr_mbuf = m;
+ 	hdr_addr = desc_addr;
+-	hdr_phys_addr = buf_vec[vec_idx].buf_addr;
++	if (unlikely(desc_chunck_len < dev->vhost_hlen))
++		hdr = &tmp_hdr;
++	else
++		hdr = (struct virtio_net_hdr_mrg_rxbuf *)(uintptr_t)hdr_addr;
++	hdr_phys_addr = desc_gaddr;
+ 	rte_prefetch0((void *)(uintptr_t)hdr_addr);
+ 
+@@ -704,5 +710,22 @@
+ 
+ 	desc_avail  = buf_vec[vec_idx].buf_len - dev->vhost_hlen;
+-	desc_offset = dev->vhost_hlen;
++	if (unlikely(desc_chunck_len < dev->vhost_hlen)) {
++		desc_chunck_len = desc_avail;
++		desc_gaddr += dev->vhost_hlen;
++		desc_addr = vhost_iova_to_vva(dev, vq,
++				desc_gaddr,
++				&desc_chunck_len,
++				VHOST_ACCESS_RW);
++		if (unlikely(!desc_addr)) {
++			error = -1;
++			goto out;
++		}
++
++		desc_offset = 0;
++	} else {
++		desc_offset = dev->vhost_hlen;
++		desc_chunck_len -= dev->vhost_hlen;
++	}
++
+ 
+ 	mbuf_avail  = rte_pktmbuf_data_len(m);
+@@ -712,12 +735,12 @@
+ 		if (desc_avail == 0) {
+ 			vec_idx++;
+-			dlen = buf_vec[vec_idx].buf_len;
++			desc_chunck_len = buf_vec[vec_idx].buf_len;
++			desc_gaddr = buf_vec[vec_idx].buf_addr;
+ 			desc_addr =
+ 				vhost_iova_to_vva(dev, vq,
+-					buf_vec[vec_idx].buf_addr,
+-					&dlen,
++					desc_gaddr,
++					&desc_chunck_len,
+ 					VHOST_ACCESS_RW);
+-			if (unlikely(!desc_addr ||
+-					dlen != buf_vec[vec_idx].buf_len)) {
++			if (unlikely(!desc_addr)) {
+ 				error = -1;
+ 				goto out;
+@@ -728,4 +751,15 @@
+ 			desc_offset = 0;
+ 			desc_avail  = buf_vec[vec_idx].buf_len;
++		} else if (unlikely(desc_chunck_len == 0)) {
++			desc_chunck_len = desc_avail;
++			desc_gaddr += desc_offset;
++			desc_addr = vhost_iova_to_vva(dev, vq,
++					desc_gaddr,
++					&desc_chunck_len, VHOST_ACCESS_RW);
++			if (unlikely(!desc_addr)) {
++				error = -1;
++				goto out;
++			}
++			desc_offset = 0;
+ 		}
+ 
+@@ -739,19 +773,46 @@
+ 
+ 		if (hdr_addr) {
+-			struct virtio_net_hdr_mrg_rxbuf *hdr;
+-
+-			hdr = (struct virtio_net_hdr_mrg_rxbuf *)(uintptr_t)
+-				hdr_addr;
+ 			virtio_enqueue_offload(hdr_mbuf, &hdr->hdr);
+ 			ASSIGN_UNLESS_EQUAL(hdr->num_buffers, num_buffers);
+ 
+-			vhost_log_write(dev, hdr_phys_addr, dev->vhost_hlen);
+-			PRINT_PACKET(dev, (uintptr_t)hdr_addr,
+-				     dev->vhost_hlen, 0);
++			if (unlikely(hdr == &tmp_hdr)) {
++				uint64_t len;
++				uint64_t remain = dev->vhost_hlen;
++				uint64_t src = (uint64_t)(uintptr_t)hdr, dst;
++				uint64_t guest_addr = hdr_phys_addr;
++
++				while (remain) {
++					len = remain;
++					dst = vhost_iova_to_vva(dev, vq,
++							guest_addr, &len,
++							VHOST_ACCESS_RW);
++					if (unlikely(!dst || !len)) {
++						error = -1;
++						goto out;
++					}
++
++					rte_memcpy((void *)(uintptr_t)dst,
++							(void *)(uintptr_t)src,
++							len);
++
++					PRINT_PACKET(dev, (uintptr_t)dst,
++							len, 0);
++					vhost_log_write(dev, guest_addr, len);
++
++					remain -= len;
++					guest_addr += len;
++					dst += len;
++				}
++			} else {
++				PRINT_PACKET(dev, (uintptr_t)hdr_addr,
++						dev->vhost_hlen, 0);
++				vhost_log_write(dev, hdr_phys_addr,
++						dev->vhost_hlen);
++			}
+ 
+ 			hdr_addr = 0;
+ 		}
+ 
+-		cpy_len = RTE_MIN(desc_avail, mbuf_avail);
++		cpy_len = RTE_MIN(desc_chunck_len, mbuf_avail);
+ 
+ 		if (likely(cpy_len > MAX_BATCH_LEN || copy_nb >= vq->size)) {
+@@ -760,7 +821,5 @@
+ 				rte_pktmbuf_mtod_offset(m, void *, mbuf_offset),
+ 				cpy_len);
+-			vhost_log_write(dev,
+-				buf_vec[vec_idx].buf_addr + desc_offset,
+-				cpy_len);
++			vhost_log_write(dev, desc_gaddr + desc_offset, cpy_len);
+ 			PRINT_PACKET(dev, (uintptr_t)(desc_addr + desc_offset),
+ 				cpy_len, 0);
+@@ -770,6 +829,5 @@
+ 			batch_copy[copy_nb].src =
+ 				rte_pktmbuf_mtod_offset(m, void *, mbuf_offset);
+-			batch_copy[copy_nb].log_addr =
+-				buf_vec[vec_idx].buf_addr + desc_offset;
++			batch_copy[copy_nb].log_addr = desc_gaddr + desc_offset;
+ 			batch_copy[copy_nb].len = cpy_len;
+ 			copy_nb++;
+@@ -780,4 +838,5 @@
+ 		desc_avail  -= cpy_len;
+ 		desc_offset += cpy_len;
++		desc_chunck_len -= cpy_len;
+ 	}
+ 
+-- 
+1.8.3.1
+

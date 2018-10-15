@@ -1,0 +1,144 @@
+commit 91b8ec6c141a2246010c1e9d4b3e5d3dfb886b94
+Author: Eelco Chaudron <echaudro@redhat.com>
+Date:   Mon Jun 4 10:07:36 2018 +0200
+
+    ovs-thread: Fix thread id for threads not started with ovs_thread_create()
+    
+    When ping-pong'in a live VM migration between two machines running
+    OVS-DPDK every now and then the ping misses would increase
+    dramatically. For example:
+    Acked-by: Ilya Maximets <i.maximets@samsung.com>
+    
+    ===========Stream Rate: 3Mpps===========
+    No Stream_Rate Downtime Totaltime Ping_Loss Moongen_Loss
+     0       3Mpps      128     13974       115      7168374
+     1       3Mpps      145     13620        17      1169770
+     2       3Mpps      140     14499       116      7141175
+     3       3Mpps      142     13358        16      1150606
+     4       3Mpps      136     14004        16      1124020
+     5       3Mpps      139     15494       214     13170452
+     6       3Mpps      136     15610       217     13282413
+     7       3Mpps      146     13194        17      1167512
+     8       3Mpps      148     12871        16      1162655
+     9       3Mpps      137     15615       214     13170656
+    
+    I identified this issue being introduced in OVS commit,
+    f3e7ec254738 ("Update relevant artifacts to add support for DPDK 17.05.1.")
+    and more specific due to DPDK commit,
+    af1475918124 ("vhost: introduce API to start a specific driver").
+    
+    The combined changes no longer have OVS start the vhost socket polling
+    thread at startup, but DPDK will do it on its own when the first vhost
+    client is started.
+    
+    Figuring out the reason why this happens kept me puzzled for quite some time...
+    What happens is that the callbacks called from the vhost thread are
+    calling ovsrcu_synchronize() as part of destroy_device(). This will
+    end-up calling seq_wait__().
+    
+    By default, all created threads outside of OVS will get thread id 0,
+    which is equal to the main ovs thread. So for example in the
+    seq_wait__() function above if the main thread is waiting already we
+    won't add ourselves as a waiter.
+    
+    The fix below assigns OVSTHREAD_ID_UNSET to none OVS created threads,
+    which will get updated to a valid ID on the first call to
+    ovsthread_id_self().
+    
+    Signed-off-by: Eelco Chaudron <echaudro@redhat.com>
+    Fixes: f3e7ec254738 ("Update relevant artifacts to add support for DPDK
+                          17.05.1.")
+    Acked-by: Ilya Maximets <i.maximets@samsung.com>
+    Signed-off-by: Ian Stokes <ian.stokes@intel.com>
+
+diff --git a/lib/ovs-thread.c b/lib/ovs-thread.c
+index f8bc06d38..c72bc543b 100644
+--- a/lib/ovs-thread.c
++++ b/lib/ovs-thread.c
+@@ -315,7 +315,7 @@ ovs_barrier_block(struct ovs_barrier *barrier)
+     }
+ }
+ 
+-DEFINE_EXTERN_PER_THREAD_DATA(ovsthread_id, 0);
++DEFINE_EXTERN_PER_THREAD_DATA(ovsthread_id, OVSTHREAD_ID_UNSET);
+ 
+ struct ovsthread_aux {
+     void *(*start)(void *);
+@@ -323,17 +323,23 @@ struct ovsthread_aux {
+     char name[16];
+ };
+ 
++unsigned int
++ovsthread_id_init(void)
++{
++    static atomic_count next_id = ATOMIC_COUNT_INIT(0);
++
++    ovs_assert(*ovsthread_id_get() == OVSTHREAD_ID_UNSET);
++    return *ovsthread_id_get() = atomic_count_inc(&next_id);
++}
++
+ static void *
+ ovsthread_wrapper(void *aux_)
+ {
+-    static atomic_count next_id = ATOMIC_COUNT_INIT(1);
+-
+     struct ovsthread_aux *auxp = aux_;
+     struct ovsthread_aux aux;
+     unsigned int id;
+ 
+-    id = atomic_count_inc(&next_id);
+-    *ovsthread_id_get() = id;
++    id = ovsthread_id_init();
+ 
+     aux = *auxp;
+     free(auxp);
+diff --git a/lib/ovs-thread.h b/lib/ovs-thread.h
+index 03fd80439..0f9663324 100644
+--- a/lib/ovs-thread.h
++++ b/lib/ovs-thread.h
+@@ -465,14 +465,24 @@ void *ovsthread_getspecific(ovsthread_key_t);
+  * This thread ID avoids the problem.
+  */
+ 
++#define OVSTHREAD_ID_UNSET UINT_MAX
+ DECLARE_EXTERN_PER_THREAD_DATA(unsigned int, ovsthread_id);
+ 
++/* Initializes the unique per thread identifier */
++unsigned int ovsthread_id_init(void);
++
+ /* Returns a per-thread identifier unique within the lifetime of the
+  * process. */
+ static inline unsigned int
+ ovsthread_id_self(void)
+ {
+-    return *ovsthread_id_get();
++    unsigned int id = *ovsthread_id_get();
++
++    if (OVS_UNLIKELY(id == OVSTHREAD_ID_UNSET)) {
++        id = ovsthread_id_init();
++    }
++
++    return id;
+ }
+ 
+ /* Simulated global counter.
+diff --git a/vswitchd/ovs-vswitchd.c b/vswitchd/ovs-vswitchd.c
+index 414b54780..46da45db9 100644
+--- a/vswitchd/ovs-vswitchd.c
++++ b/vswitchd/ovs-vswitchd.c
+@@ -39,6 +39,7 @@
+ #include "memory.h"
+ #include "netdev.h"
+ #include "openflow/openflow.h"
++#include "ovs-thread.h"
+ #include "ovsdb-idl.h"
+ #include "openvswitch/poll-loop.h"
+ #include "simap.h"
+@@ -78,6 +79,7 @@ main(int argc, char *argv[])
+     int retval;
+ 
+     set_program_name(argv[0]);
++    ovsthread_id_init();
+ 
+     ovs_cmdl_proctitle_init(argc, argv);
+     service_start(&argc, &argv);

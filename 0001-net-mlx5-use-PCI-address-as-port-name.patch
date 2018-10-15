@@ -1,0 +1,73 @@
+From 1092b5cd70af89b5000f793e4e326ccb04871552 Mon Sep 17 00:00:00 2001
+From: Yuanhan Liu <yliu@fridaylinux.org>
+Date: Mon, 22 Jan 2018 17:30:06 +0800
+Subject: [PATCH] net/mlx5: use PCI address as port name
+
+It is suggested to use PCI BDF to identify a port for port addition
+in OVS-DPDK. While mlx5 has its own naming style: name it by ib dev
+name. This breaks the typical OVS DPDK use case and brings more puzzle
+to the end users.
+
+To fix it, this patch changes it to use PCI BDF as the name, too.
+Also, a postfix " port %u" is added, just in case their might be more
+than 1 port associated with a PCI device.
+
+Signed-off-by: Yuanhan Liu <yliu@fridaylinux.org>
+Acked-by: Nelio Laranjeiro <nelio.laranjeiro@6wind.com>
+---
+ drivers/net/mlx5/mlx5.c | 22 +++++++++-------------
+ 1 file changed, 9 insertions(+), 13 deletions(-)
+
+diff --git a/dpdk-17.11/drivers/net/mlx5/mlx5.c b/dpdk-17.11/drivers/net/mlx5/mlx5.c
+index a5eb3fdc5..ec3ddcf28 100644
+--- a/dpdk-17.11/drivers/net/mlx5/mlx5.c
++++ b/dpdk-17.11/drivers/net/mlx5/mlx5.c
+@@ -662,6 +662,8 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
+ 	INFO("%u port(s) detected", device_attr.orig_attr.phys_port_cnt);
+ 
+ 	for (i = 0; i < device_attr.orig_attr.phys_port_cnt; i++) {
++		char name[RTE_ETH_NAME_MAX_LEN];
++		int len;
+ 		uint32_t port = i + 1; /* ports are indexed from one */
+ 		uint32_t test = (1 << i);
+ 		struct ibv_context *ctx = NULL;
+@@ -685,14 +687,15 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
+ 			.rx_vec_en = MLX5_ARG_UNSET,
+ 		};
+ 
++		len = snprintf(name, sizeof(name), PCI_PRI_FMT,
++			 pci_dev->addr.domain, pci_dev->addr.bus,
++			 pci_dev->addr.devid, pci_dev->addr.function);
++		if (device_attr.orig_attr.phys_port_cnt > 1)
++			snprintf(name + len, sizeof(name), " port %u", i);
++
+ 		mlx5_dev[idx].ports |= test;
+ 
+ 		if (mlx5_is_secondary()) {
+-			/* from rte_ethdev.c */
+-			char name[RTE_ETH_NAME_MAX_LEN];
+-
+-			snprintf(name, sizeof(name), "%s port %u",
+-				 ibv_get_device_name(ibv_dev), port);
+ 			eth_dev = rte_eth_dev_attach_secondary(name);
+ 			if (eth_dev == NULL) {
+ 				ERROR("can not attach rte ethdev");
+@@ -902,14 +905,7 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
+ 		priv_get_mtu(priv, &priv->mtu);
+ 		DEBUG("port %u MTU is %u", priv->port, priv->mtu);
+ 
+-		/* from rte_ethdev.c */
+-		{
+-			char name[RTE_ETH_NAME_MAX_LEN];
+-
+-			snprintf(name, sizeof(name), "%s port %u",
+-				 ibv_get_device_name(ibv_dev), port);
+-			eth_dev = rte_eth_dev_allocate(name);
+-		}
++		eth_dev = rte_eth_dev_allocate(name);
+ 		if (eth_dev == NULL) {
+ 			ERROR("can not allocate rte ethdev");
+ 			err = ENOMEM;
+-- 
+2.14.3
+

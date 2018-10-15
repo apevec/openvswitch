@@ -1,0 +1,69 @@
+From f8d2581ecbba056db08888d562eafe5181a009ba Mon Sep 17 00:00:00 2001
+Message-Id: <f8d2581ecbba056db08888d562eafe5181a009ba.1528327825.git.tredaelli@redhat.com>
+From: Shahed Shaikh <shahed.shaikh@cavium.com>
+Date: Sat, 19 May 2018 17:15:46 -0700
+Subject: [PATCH] net/qede: fix unicast filter routine return code
+
+There is no need to return failure (-EEXIST) when the requested
+filter is already configured.
+
+Fixes: d6cb17535f88 ("net/qede: fix VLAN filters")
+Fixes: 77fac1b54fc9 ("net/qede: fix filtering code")
+Cc: stable@dpdk.org
+
+Signed-off-by: Shahed Shaikh <shahed.shaikh@cavium.com>
+---
+ drivers/net/qede/qede_ethdev.c | 14 +++++++-------
+ drivers/net/qede/qede_fdir.c   |  4 ++--
+ 2 files changed, 9 insertions(+), 9 deletions(-)
+
+diff --git a/dpdk-17.11/drivers/net/qede/qede_ethdev.c b/dpdk-17.11/drivers/net/qede/qede_ethdev.c
+index 3e1a62c9f..30b65195c 100644
+--- a/dpdk-17.11/drivers/net/qede/qede_ethdev.c
++++ b/dpdk-17.11/drivers/net/qede/qede_ethdev.c
+@@ -857,10 +857,10 @@ qede_ucast_filter(struct rte_eth_dev *eth_dev, struct ecore_filter_ucast *ucast,
+ 				    ETHER_ADDR_LEN) == 0) &&
+ 			     ucast->vni == tmp->vni &&
+ 			     ucast->vlan == tmp->vlan) {
+-				DP_ERR(edev, "Unicast MAC is already added"
+-				       " with vlan = %u, vni = %u\n",
+-				       ucast->vlan,  ucast->vni);
+-					return -EEXIST;
++				DP_INFO(edev, "Unicast MAC is already added"
++					" with vlan = %u, vni = %u\n",
++					ucast->vlan,  ucast->vni);
++					return 0;
+ 			}
+ 		}
+ 		u = rte_malloc(NULL, sizeof(struct qede_ucast_entry),
+@@ -1117,9 +1117,9 @@ static int qede_vlan_filter_set(struct rte_eth_dev *eth_dev,
+ 
+ 		SLIST_FOREACH(tmp, &qdev->vlan_list_head, list) {
+ 			if (tmp->vid == vlan_id) {
+-				DP_ERR(edev, "VLAN %u already configured\n",
+-				       vlan_id);
+-				return -EEXIST;
++				DP_INFO(edev, "VLAN %u already configured\n",
++					vlan_id);
++				return 0;
+ 			}
+ 		}
+ 
+diff --git a/dpdk-17.11/drivers/net/qede/qede_fdir.c b/dpdk-17.11/drivers/net/qede/qede_fdir.c
+index da6364ee5..153ef9640 100644
+--- a/dpdk-17.11/drivers/net/qede/qede_fdir.c
++++ b/dpdk-17.11/drivers/net/qede/qede_fdir.c
+@@ -141,8 +141,8 @@ qede_config_cmn_fdir_filter(struct rte_eth_dev *eth_dev,
+ 	if (add) {
+ 		SLIST_FOREACH(tmp, &qdev->fdir_info.fdir_list_head, list) {
+ 			if (memcmp(tmp->mz->addr, pkt, pkt_len) == 0) {
+-				DP_ERR(edev, "flowdir filter exist\n");
+-				rc = -EEXIST;
++				DP_INFO(edev, "flowdir filter exist\n");
++				rc = 0;
+ 				goto err2;
+ 			}
+ 		}
+-- 
+2.17.0
+

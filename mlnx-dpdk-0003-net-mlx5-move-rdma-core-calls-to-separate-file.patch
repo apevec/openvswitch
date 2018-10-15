@@ -1,0 +1,1318 @@
+From 04b49e536cf78ec05203c96e8f5d4c5d9ceb6183 Mon Sep 17 00:00:00 2001
+From: Nelio Laranjeiro <nelio.laranjeiro@6wind.com>
+Date: Tue, 30 Jan 2018 16:34:56 +0100
+Subject: [PATCH 3/9] net/mlx5: move rdma-core calls to separate file
+
+This lays the groundwork for externalizing rdma-core as an optional
+run-time dependency instead of a mandatory one.
+
+No functional change.
+
+Signed-off-by: Nelio Laranjeiro <nelio.laranjeiro@6wind.com>
+Signed-off-by: Adrien Mazarguil <adrien.mazarguil@6wind.com>
+(cherry picked from commit c89f0e24d4f0c775dcbfcaa964e9c8f1de815ce5)
+---
+ drivers/net/mlx5/Makefile      |   1 +
+ drivers/net/mlx5/mlx5.c        |  48 +++---
+ drivers/net/mlx5/mlx5_ethdev.c |   5 +-
+ drivers/net/mlx5/mlx5_flow.c   |  96 ++++++-----
+ drivers/net/mlx5/mlx5_glue.c   | 359 +++++++++++++++++++++++++++++++++++++++++
+ drivers/net/mlx5/mlx5_glue.h   | 107 ++++++++++++
+ drivers/net/mlx5/mlx5_mr.c     |   7 +-
+ drivers/net/mlx5/mlx5_rxq.c    |  54 ++++---
+ drivers/net/mlx5/mlx5_txq.c    |  22 +--
+ drivers/net/mlx5/mlx5_vlan.c   |  13 +-
+ 10 files changed, 598 insertions(+), 114 deletions(-)
+ create mode 100644 drivers/net/mlx5/mlx5_glue.c
+ create mode 100644 drivers/net/mlx5/mlx5_glue.h
+
+diff --git a/dpdk-17.11/drivers/net/mlx5/Makefile b/dpdk-17.11/drivers/net/mlx5/Makefile
+index a3984eb..bdec306 100644
+--- a/dpdk-17.11/drivers/net/mlx5/Makefile
++++ b/dpdk-17.11/drivers/net/mlx5/Makefile
+@@ -53,6 +53,7 @@ SRCS-$(CONFIG_RTE_LIBRTE_MLX5_PMD) += mlx5_rss.c
+ SRCS-$(CONFIG_RTE_LIBRTE_MLX5_PMD) += mlx5_mr.c
+ SRCS-$(CONFIG_RTE_LIBRTE_MLX5_PMD) += mlx5_flow.c
+ SRCS-$(CONFIG_RTE_LIBRTE_MLX5_PMD) += mlx5_socket.c
++SRCS-$(CONFIG_RTE_LIBRTE_MLX5_PMD) += mlx5_glue.c
+ 
+ # Basic CFLAGS.
+ CFLAGS += -O3
+diff --git a/dpdk-17.11/drivers/net/mlx5/mlx5.c b/dpdk-17.11/drivers/net/mlx5/mlx5.c
+index 0548d17..f77bdda 100644
+--- a/dpdk-17.11/drivers/net/mlx5/mlx5.c
++++ b/dpdk-17.11/drivers/net/mlx5/mlx5.c
+@@ -63,6 +63,7 @@
+ #include "mlx5_rxtx.h"
+ #include "mlx5_autoconf.h"
+ #include "mlx5_defs.h"
++#include "mlx5_glue.h"
+ 
+ /* Device parameter to enable RX completion queue compression. */
+ #define MLX5_RXQ_CQE_COMP_EN "rxq_cqe_comp_en"
+@@ -225,8 +226,8 @@ struct mlx5_args {
+ 	}
+ 	if (priv->pd != NULL) {
+ 		assert(priv->ctx != NULL);
+-		claim_zero(ibv_dealloc_pd(priv->pd));
+-		claim_zero(ibv_close_device(priv->ctx));
++		claim_zero(mlx5_glue->dealloc_pd(priv->pd));
++		claim_zero(mlx5_glue->close_device(priv->ctx));
+ 	} else
+ 		assert(priv->ctx == NULL);
+ 	if (priv->rss_conf.rss_key != NULL)
+@@ -565,7 +566,7 @@ struct mlx5_args {
+ 
+ 	/* Save PCI address. */
+ 	mlx5_dev[idx].pci_addr = pci_dev->addr;
+-	list = ibv_get_device_list(&i);
++	list = mlx5_glue->get_device_list(&i);
+ 	if (list == NULL) {
+ 		assert(errno);
+ 		if (errno == ENOSYS)
+@@ -615,12 +616,12 @@ struct mlx5_args {
+ 		     " (SR-IOV: %s)",
+ 		     list[i]->name,
+ 		     sriov ? "true" : "false");
+-		attr_ctx = ibv_open_device(list[i]);
++		attr_ctx = mlx5_glue->open_device(list[i]);
+ 		err = errno;
+ 		break;
+ 	}
+ 	if (attr_ctx == NULL) {
+-		ibv_free_device_list(list);
++		mlx5_glue->free_device_list(list);
+ 		switch (err) {
+ 		case 0:
+ 			ERROR("cannot access device, is mlx5_ib loaded?");
+@@ -639,7 +640,7 @@ struct mlx5_args {
+ 	 * Multi-packet send is supported by ConnectX-4 Lx PF as well
+ 	 * as all ConnectX-5 devices.
+ 	 */
+-	mlx5dv_query_device(attr_ctx, &attrs_out);
++	mlx5_glue->dv_query_device(attr_ctx, &attrs_out);
+ 	if (attrs_out.flags & MLX5DV_CONTEXT_FLAGS_MPW_ALLOWED) {
+ 		if (attrs_out.flags & MLX5DV_CONTEXT_FLAGS_ENHANCED_MPW) {
+ 			DEBUG("Enhanced MPW is supported");
+@@ -657,7 +658,7 @@ struct mlx5_args {
+ 		cqe_comp = 0;
+ 	else
+ 		cqe_comp = 1;
+-	if (ibv_query_device_ex(attr_ctx, NULL, &device_attr))
++	if (mlx5_glue->query_device_ex(attr_ctx, NULL, &device_attr))
+ 		goto error;
+ 	INFO("%u port(s) detected", device_attr.orig_attr.phys_port_cnt);
+ 
+@@ -721,15 +722,15 @@ struct mlx5_args {
+ 
+ 		DEBUG("using port %u (%08" PRIx32 ")", port, test);
+ 
+-		ctx = ibv_open_device(ibv_dev);
++		ctx = mlx5_glue->open_device(ibv_dev);
+ 		if (ctx == NULL) {
+ 			err = ENODEV;
+ 			goto port_error;
+ 		}
+ 
+-		ibv_query_device_ex(ctx, NULL, &device_attr);
++		mlx5_glue->query_device_ex(ctx, NULL, &device_attr);
+ 		/* Check port status. */
+-		err = ibv_query_port(ctx, port, &port_attr);
++		err = mlx5_glue->query_port(ctx, port, &port_attr);
+ 		if (err) {
+ 			ERROR("port query failed: %s", strerror(err));
+ 			goto port_error;
+@@ -744,11 +745,11 @@ struct mlx5_args {
+ 
+ 		if (port_attr.state != IBV_PORT_ACTIVE)
+ 			DEBUG("port %d is not active: \"%s\" (%d)",
+-			      port, ibv_port_state_str(port_attr.state),
++			      port, mlx5_glue->port_state_str(port_attr.state),
+ 			      port_attr.state);
+ 
+ 		/* Allocate protection domain. */
+-		pd = ibv_alloc_pd(ctx);
++		pd = mlx5_glue->alloc_pd(ctx);
+ 		if (pd == NULL) {
+ 			ERROR("PD allocation failure");
+ 			err = ENOMEM;
+@@ -787,7 +788,7 @@ struct mlx5_args {
+ 			goto port_error;
+ 		}
+ 		mlx5_args_assign(priv, &args);
+-		if (ibv_query_device_ex(ctx, NULL, &device_attr_ex)) {
++		if (mlx5_glue->query_device_ex(ctx, NULL, &device_attr_ex)) {
+ 			ERROR("ibv_query_device_ex() failed");
+ 			goto port_error;
+ 		}
+@@ -807,7 +808,7 @@ struct mlx5_args {
+ 
+ #ifdef HAVE_IBV_DEVICE_COUNTERS_SET_SUPPORT
+ 		priv->counter_set_supported = !!(device_attr.max_counter_sets);
+-		ibv_describe_counter_set(ctx, 0, &cs_desc);
++		mlx5_glue->describe_counter_set(ctx, 0, &cs_desc);
+ 		DEBUG("counter type = %d, num of cs = %ld, attributes = %d",
+ 		      cs_desc.counter_type, cs_desc.num_of_cs,
+ 		      cs_desc.attributes);
+@@ -933,8 +934,9 @@ struct mlx5_args {
+ 			.free = &mlx5_free_verbs_buf,
+ 			.data = priv,
+ 		};
+-		mlx5dv_set_context_attr(ctx, MLX5DV_CTX_ATTR_BUF_ALLOCATORS,
+-					(void *)((uintptr_t)&alctr));
++		mlx5_glue->dv_set_context_attr(ctx,
++					       MLX5DV_CTX_ATTR_BUF_ALLOCATORS,
++					       (void *)((uintptr_t)&alctr));
+ 
+ 		/* Bring Ethernet device up. */
+ 		DEBUG("forcing Ethernet interface up");
+@@ -946,9 +948,9 @@ struct mlx5_args {
+ 		if (priv)
+ 			rte_free(priv);
+ 		if (pd)
+-			claim_zero(ibv_dealloc_pd(pd));
++			claim_zero(mlx5_glue->dealloc_pd(pd));
+ 		if (ctx)
+-			claim_zero(ibv_close_device(ctx));
++			claim_zero(mlx5_glue->close_device(ctx));
+ 		break;
+ 	}
+ 
+@@ -967,9 +969,9 @@ struct mlx5_args {
+ 
+ error:
+ 	if (attr_ctx)
+-		claim_zero(ibv_close_device(attr_ctx));
++		claim_zero(mlx5_glue->close_device(attr_ctx));
+ 	if (list)
+-		ibv_free_device_list(list);
++		mlx5_glue->free_device_list(list);
+ 	assert(err >= 0);
+ 	return -err;
+ }
+@@ -1040,7 +1042,7 @@ struct mlx5_args {
+ 	/* Match the size of Rx completion entry to the size of a cacheline. */
+ 	if (RTE_CACHE_LINE_SIZE == 128)
+ 		setenv("MLX5_CQE_SIZE", "128", 0);
+-	ibv_fork_init();
++	mlx5_glue->fork_init();
+ 	rte_pci_register(&mlx5_driver);
+ }
+ 
+diff --git a/dpdk-17.11/drivers/net/mlx5/mlx5_ethdev.c b/dpdk-17.11/drivers/net/mlx5/mlx5_ethdev.c
+index a3cef68..5620cce 100644
+--- a/dpdk-17.11/drivers/net/mlx5/mlx5_ethdev.c
++++ b/dpdk-17.11/drivers/net/mlx5/mlx5_ethdev.c
+@@ -64,6 +64,7 @@
+ #include <rte_malloc.h>
+ 
+ #include "mlx5.h"
++#include "mlx5_glue.h"
+ #include "mlx5_rxtx.h"
+ #include "mlx5_utils.h"
+ 
+@@ -1191,7 +1192,7 @@ struct priv *
+ 
+ 	/* Read all message and acknowledge them. */
+ 	for (;;) {
+-		if (ibv_get_async_event(priv->ctx, &event))
++		if (mlx5_glue->get_async_event(priv->ctx, &event))
+ 			break;
+ 		if ((event.event_type == IBV_EVENT_PORT_ACTIVE ||
+ 			event.event_type == IBV_EVENT_PORT_ERR) &&
+@@ -1203,7 +1204,7 @@ struct priv *
+ 		else
+ 			DEBUG("event type %d on port %d not handled",
+ 			      event.event_type, event.element.port_num);
+-		ibv_ack_async_event(&event);
++		mlx5_glue->ack_async_event(&event);
+ 	}
+ 	if (ret & (1 << RTE_ETH_EVENT_INTR_LSC))
+ 		if (priv_link_status_update(priv))
+diff --git a/dpdk-17.11/drivers/net/mlx5/mlx5_flow.c b/dpdk-17.11/drivers/net/mlx5/mlx5_flow.c
+index f32dfdd..fb85877 100644
+--- a/dpdk-17.11/drivers/net/mlx5/mlx5_flow.c
++++ b/dpdk-17.11/drivers/net/mlx5/mlx5_flow.c
+@@ -51,6 +51,7 @@
+ 
+ #include "mlx5.h"
+ #include "mlx5_prm.h"
++#include "mlx5_glue.h"
+ 
+ /* Define minimal priority for control plane flows. */
+ #define MLX5_CTRL_FLOW_PRIORITY 4
+@@ -60,22 +61,9 @@
+ #define MLX5_IPV6 6
+ 
+ #ifndef HAVE_IBV_DEVICE_COUNTERS_SET_SUPPORT
+-struct ibv_counter_set_init_attr {
+-	int dummy;
+-};
+ struct ibv_flow_spec_counter_action {
+ 	int dummy;
+ };
+-struct ibv_counter_set {
+-	int dummy;
+-};
+-
+-static inline int
+-ibv_destroy_counter_set(struct ibv_counter_set *cs)
+-{
+-	(void)cs;
+-	return -ENOTSUP;
+-}
+ #endif
+ 
+ /* Dev ops structure defined in mlx5.c */
+@@ -1664,7 +1652,7 @@ struct ibv_spec_header {
+ 	};
+ 
+ 	init_attr.counter_set_id = 0;
+-	parser->cs = ibv_create_counter_set(priv->ctx, &init_attr);
++	parser->cs = mlx5_glue->create_counter_set(priv->ctx, &init_attr);
+ 	if (!parser->cs)
+ 		return EINVAL;
+ 	counter.counter_set_handle = parser->cs->handle;
+@@ -1715,8 +1703,8 @@ struct ibv_spec_header {
+ 	if (!priv->dev->data->dev_started)
+ 		return 0;
+ 	parser->drop_q.ibv_attr = NULL;
+-	flow->drxq.ibv_flow = ibv_create_flow(priv->flow_drop_queue->qp,
+-					      flow->drxq.ibv_attr);
++	flow->drxq.ibv_flow = mlx5_glue->create_flow(priv->flow_drop_queue->qp,
++						     flow->drxq.ibv_attr);
+ 	if (!flow->drxq.ibv_flow) {
+ 		rte_flow_error_set(error, ENOMEM, RTE_FLOW_ERROR_TYPE_HANDLE,
+ 				   NULL, "flow rule creation failure");
+@@ -1727,7 +1715,7 @@ struct ibv_spec_header {
+ error:
+ 	assert(flow);
+ 	if (flow->drxq.ibv_flow) {
+-		claim_zero(ibv_destroy_flow(flow->drxq.ibv_flow));
++		claim_zero(mlx5_glue->destroy_flow(flow->drxq.ibv_flow));
+ 		flow->drxq.ibv_flow = NULL;
+ 	}
+ 	if (flow->drxq.ibv_attr) {
+@@ -1735,7 +1723,7 @@ struct ibv_spec_header {
+ 		flow->drxq.ibv_attr = NULL;
+ 	}
+ 	if (flow->cs) {
+-		claim_zero(ibv_destroy_counter_set(flow->cs));
++		claim_zero(mlx5_glue->destroy_counter_set(flow->cs));
+ 		flow->cs = NULL;
+ 		parser->cs = NULL;
+ 	}
+@@ -1839,8 +1827,8 @@ struct ibv_spec_header {
+ 		if (!flow->frxq[i].hrxq)
+ 			continue;
+ 		flow->frxq[i].ibv_flow =
+-			ibv_create_flow(flow->frxq[i].hrxq->qp,
+-					flow->frxq[i].ibv_attr);
++			mlx5_glue->create_flow(flow->frxq[i].hrxq->qp,
++					       flow->frxq[i].ibv_attr);
+ 		if (!flow->frxq[i].ibv_flow) {
+ 			rte_flow_error_set(error, ENOMEM,
+ 					   RTE_FLOW_ERROR_TYPE_HANDLE,
+@@ -1866,7 +1854,7 @@ struct ibv_spec_header {
+ 		if (flow->frxq[i].ibv_flow) {
+ 			struct ibv_flow *ibv_flow = flow->frxq[i].ibv_flow;
+ 
+-			claim_zero(ibv_destroy_flow(ibv_flow));
++			claim_zero(mlx5_glue->destroy_flow(ibv_flow));
+ 		}
+ 		if (flow->frxq[i].hrxq)
+ 			mlx5_priv_hrxq_release(priv, flow->frxq[i].hrxq);
+@@ -1874,7 +1862,7 @@ struct ibv_spec_header {
+ 			rte_free(flow->frxq[i].ibv_attr);
+ 	}
+ 	if (flow->cs) {
+-		claim_zero(ibv_destroy_counter_set(flow->cs));
++		claim_zero(mlx5_glue->destroy_counter_set(flow->cs));
+ 		flow->cs = NULL;
+ 		parser->cs = NULL;
+ 	}
+@@ -2056,14 +2044,16 @@ struct rte_flow *
+ free:
+ 	if (flow->drop) {
+ 		if (flow->drxq.ibv_flow)
+-			claim_zero(ibv_destroy_flow(flow->drxq.ibv_flow));
++			claim_zero(mlx5_glue->destroy_flow
++				   (flow->drxq.ibv_flow));
+ 		rte_free(flow->drxq.ibv_attr);
+ 	} else {
+ 		for (i = 0; i != hash_rxq_init_n; ++i) {
+ 			struct mlx5_flow *frxq = &flow->frxq[i];
+ 
+ 			if (frxq->ibv_flow)
+-				claim_zero(ibv_destroy_flow(frxq->ibv_flow));
++				claim_zero(mlx5_glue->destroy_flow
++					   (frxq->ibv_flow));
+ 			if (frxq->hrxq)
+ 				mlx5_priv_hrxq_release(priv, frxq->hrxq);
+ 			if (frxq->ibv_attr)
+@@ -2071,7 +2061,7 @@ struct rte_flow *
+ 		}
+ 	}
+ 	if (flow->cs) {
+-		claim_zero(ibv_destroy_counter_set(flow->cs));
++		claim_zero(mlx5_glue->destroy_counter_set(flow->cs));
+ 		flow->cs = NULL;
+ 	}
+ 	TAILQ_REMOVE(list, flow, next);
+@@ -2119,35 +2109,38 @@ struct rte_flow *
+ 		WARN("cannot allocate memory for drop queue");
+ 		goto error;
+ 	}
+-	fdq->cq = ibv_create_cq(priv->ctx, 1, NULL, NULL, 0);
++	fdq->cq = mlx5_glue->create_cq(priv->ctx, 1, NULL, NULL, 0);
+ 	if (!fdq->cq) {
+ 		WARN("cannot allocate CQ for drop queue");
+ 		goto error;
+ 	}
+-	fdq->wq = ibv_create_wq(priv->ctx,
+-			&(struct ibv_wq_init_attr){
++	fdq->wq = mlx5_glue->create_wq
++		(priv->ctx,
++		 &(struct ibv_wq_init_attr){
+ 			.wq_type = IBV_WQT_RQ,
+ 			.max_wr = 1,
+ 			.max_sge = 1,
+ 			.pd = priv->pd,
+ 			.cq = fdq->cq,
+-			});
++		 });
+ 	if (!fdq->wq) {
+ 		WARN("cannot allocate WQ for drop queue");
+ 		goto error;
+ 	}
+-	fdq->ind_table = ibv_create_rwq_ind_table(priv->ctx,
+-			&(struct ibv_rwq_ind_table_init_attr){
++	fdq->ind_table = mlx5_glue->create_rwq_ind_table
++		(priv->ctx,
++		 &(struct ibv_rwq_ind_table_init_attr){
+ 			.log_ind_tbl_size = 0,
+ 			.ind_tbl = &fdq->wq,
+ 			.comp_mask = 0,
+-			});
++		 });
+ 	if (!fdq->ind_table) {
+ 		WARN("cannot allocate indirection table for drop queue");
+ 		goto error;
+ 	}
+-	fdq->qp = ibv_create_qp_ex(priv->ctx,
+-		&(struct ibv_qp_init_attr_ex){
++	fdq->qp = mlx5_glue->create_qp_ex
++		(priv->ctx,
++		 &(struct ibv_qp_init_attr_ex){
+ 			.qp_type = IBV_QPT_RAW_PACKET,
+ 			.comp_mask =
+ 				IBV_QP_INIT_ATTR_PD |
+@@ -2162,7 +2155,7 @@ struct rte_flow *
+ 				},
+ 			.rwq_ind_tbl = fdq->ind_table,
+ 			.pd = priv->pd
+-		});
++		 });
+ 	if (!fdq->qp) {
+ 		WARN("cannot allocate QP for drop queue");
+ 		goto error;
+@@ -2171,13 +2164,13 @@ struct rte_flow *
+ 	return 0;
+ error:
+ 	if (fdq->qp)
+-		claim_zero(ibv_destroy_qp(fdq->qp));
++		claim_zero(mlx5_glue->destroy_qp(fdq->qp));
+ 	if (fdq->ind_table)
+-		claim_zero(ibv_destroy_rwq_ind_table(fdq->ind_table));
++		claim_zero(mlx5_glue->destroy_rwq_ind_table(fdq->ind_table));
+ 	if (fdq->wq)
+-		claim_zero(ibv_destroy_wq(fdq->wq));
++		claim_zero(mlx5_glue->destroy_wq(fdq->wq));
+ 	if (fdq->cq)
+-		claim_zero(ibv_destroy_cq(fdq->cq));
++		claim_zero(mlx5_glue->destroy_cq(fdq->cq));
+ 	if (fdq)
+ 		rte_free(fdq);
+ 	priv->flow_drop_queue = NULL;
+@@ -2198,13 +2191,13 @@ struct rte_flow *
+ 	if (!fdq)
+ 		return;
+ 	if (fdq->qp)
+-		claim_zero(ibv_destroy_qp(fdq->qp));
++		claim_zero(mlx5_glue->destroy_qp(fdq->qp));
+ 	if (fdq->ind_table)
+-		claim_zero(ibv_destroy_rwq_ind_table(fdq->ind_table));
++		claim_zero(mlx5_glue->destroy_rwq_ind_table(fdq->ind_table));
+ 	if (fdq->wq)
+-		claim_zero(ibv_destroy_wq(fdq->wq));
++		claim_zero(mlx5_glue->destroy_wq(fdq->wq));
+ 	if (fdq->cq)
+-		claim_zero(ibv_destroy_cq(fdq->cq));
++		claim_zero(mlx5_glue->destroy_cq(fdq->cq));
+ 	rte_free(fdq);
+ 	priv->flow_drop_queue = NULL;
+ }
+@@ -2228,7 +2221,8 @@ struct rte_flow *
+ 		if (flow->drop) {
+ 			if (!flow->drxq.ibv_flow)
+ 				continue;
+-			claim_zero(ibv_destroy_flow(flow->drxq.ibv_flow));
++			claim_zero(mlx5_glue->destroy_flow
++				   (flow->drxq.ibv_flow));
+ 			flow->drxq.ibv_flow = NULL;
+ 			/* Next flow. */
+ 			continue;
+@@ -2248,7 +2242,8 @@ struct rte_flow *
+ 		for (i = 0; i != hash_rxq_init_n; ++i) {
+ 			if (!flow->frxq[i].ibv_flow)
+ 				continue;
+-			claim_zero(ibv_destroy_flow(flow->frxq[i].ibv_flow));
++			claim_zero(mlx5_glue->destroy_flow
++				   (flow->frxq[i].ibv_flow));
+ 			flow->frxq[i].ibv_flow = NULL;
+ 			mlx5_priv_hrxq_release(priv, flow->frxq[i].hrxq);
+ 			flow->frxq[i].hrxq = NULL;
+@@ -2278,8 +2273,9 @@ struct rte_flow *
+ 
+ 		if (flow->drop) {
+ 			flow->drxq.ibv_flow =
+-				ibv_create_flow(priv->flow_drop_queue->qp,
+-						flow->drxq.ibv_attr);
++				mlx5_glue->create_flow
++				(priv->flow_drop_queue->qp,
++				 flow->drxq.ibv_attr);
+ 			if (!flow->drxq.ibv_flow) {
+ 				DEBUG("Flow %p cannot be applied",
+ 				      (void *)flow);
+@@ -2315,8 +2311,8 @@ struct rte_flow *
+ 			}
+ flow_create:
+ 			flow->frxq[i].ibv_flow =
+-				ibv_create_flow(flow->frxq[i].hrxq->qp,
+-						flow->frxq[i].ibv_attr);
++				mlx5_glue->create_flow(flow->frxq[i].hrxq->qp,
++						       flow->frxq[i].ibv_attr);
+ 			if (!flow->frxq[i].ibv_flow) {
+ 				DEBUG("Flow %p cannot be applied",
+ 				      (void *)flow);
+@@ -2523,7 +2519,7 @@ struct rte_flow *
+ 		.out = counters,
+ 		.outlen = 2 * sizeof(uint64_t),
+ 	};
+-	int res = ibv_query_counter_set(&query_cs_attr, &query_out);
++	int res = mlx5_glue->query_counter_set(&query_cs_attr, &query_out);
+ 
+ 	if (res) {
+ 		rte_flow_error_set(error, -res,
+diff --git a/dpdk-17.11/drivers/net/mlx5/mlx5_glue.c b/dpdk-17.11/drivers/net/mlx5/mlx5_glue.c
+new file mode 100644
+index 0000000..ff48c1e
+--- /dev/null
++++ b/dpdk-17.11/drivers/net/mlx5/mlx5_glue.c
+@@ -0,0 +1,359 @@
++/* SPDX-License-Identifier: BSD-3-Clause
++ * Copyright 2018 6WIND S.A.
++ * Copyright 2018 Mellanox Technologies, Ltd.
++ */
++
++#include <errno.h>
++#include <stddef.h>
++#include <stdint.h>
++
++/* Verbs headers do not support -pedantic. */
++#ifdef PEDANTIC
++#pragma GCC diagnostic ignored "-Wpedantic"
++#endif
++#include <infiniband/mlx5dv.h>
++#include <infiniband/verbs.h>
++#ifdef PEDANTIC
++#pragma GCC diagnostic error "-Wpedantic"
++#endif
++
++#include "mlx5_autoconf.h"
++#include "mlx5_glue.h"
++
++static int
++mlx5_glue_fork_init(void)
++{
++	return ibv_fork_init();
++}
++
++static struct ibv_pd *
++mlx5_glue_alloc_pd(struct ibv_context *context)
++{
++	return ibv_alloc_pd(context);
++}
++
++static int
++mlx5_glue_dealloc_pd(struct ibv_pd *pd)
++{
++	return ibv_dealloc_pd(pd);
++}
++
++static struct ibv_device **
++mlx5_glue_get_device_list(int *num_devices)
++{
++	return ibv_get_device_list(num_devices);
++}
++
++static void
++mlx5_glue_free_device_list(struct ibv_device **list)
++{
++	ibv_free_device_list(list);
++}
++
++static struct ibv_context *
++mlx5_glue_open_device(struct ibv_device *device)
++{
++	return ibv_open_device(device);
++}
++
++static int
++mlx5_glue_close_device(struct ibv_context *context)
++{
++	return ibv_close_device(context);
++}
++
++static const char *
++mlx5_glue_get_device_name(struct ibv_device *device)
++{
++	return ibv_get_device_name(device);
++}
++
++static int
++mlx5_glue_query_device(struct ibv_context *context,
++		       struct ibv_device_attr *device_attr)
++{
++	return ibv_query_device(context, device_attr);
++}
++
++static int
++mlx5_glue_query_device_ex(struct ibv_context *context,
++			  const struct ibv_query_device_ex_input *input,
++			  struct ibv_device_attr_ex *attr)
++{
++	return ibv_query_device_ex(context, input, attr);
++}
++
++static int
++mlx5_glue_query_port(struct ibv_context *context, uint8_t port_num,
++		     struct ibv_port_attr *port_attr)
++{
++	return ibv_query_port(context, port_num, port_attr);
++}
++
++static struct ibv_comp_channel *
++mlx5_glue_create_comp_channel(struct ibv_context *context)
++{
++	return ibv_create_comp_channel(context);
++}
++
++static int
++mlx5_glue_destroy_comp_channel(struct ibv_comp_channel *channel)
++{
++	return ibv_destroy_comp_channel(channel);
++}
++
++static struct ibv_cq *
++mlx5_glue_create_cq(struct ibv_context *context, int cqe, void *cq_context,
++		    struct ibv_comp_channel *channel, int comp_vector)
++{
++	return ibv_create_cq(context, cqe, cq_context, channel, comp_vector);
++}
++
++static int
++mlx5_glue_destroy_cq(struct ibv_cq *cq)
++{
++	return ibv_destroy_cq(cq);
++}
++
++static int
++mlx5_glue_get_cq_event(struct ibv_comp_channel *channel, struct ibv_cq **cq,
++		       void **cq_context)
++{
++	return ibv_get_cq_event(channel, cq, cq_context);
++}
++
++static void
++mlx5_glue_ack_cq_events(struct ibv_cq *cq, unsigned int nevents)
++{
++	ibv_ack_cq_events(cq, nevents);
++}
++
++static struct ibv_rwq_ind_table *
++mlx5_glue_create_rwq_ind_table(struct ibv_context *context,
++			       struct ibv_rwq_ind_table_init_attr *init_attr)
++{
++	return ibv_create_rwq_ind_table(context, init_attr);
++}
++
++static int
++mlx5_glue_destroy_rwq_ind_table(struct ibv_rwq_ind_table *rwq_ind_table)
++{
++	return ibv_destroy_rwq_ind_table(rwq_ind_table);
++}
++
++static struct ibv_wq *
++mlx5_glue_create_wq(struct ibv_context *context,
++		    struct ibv_wq_init_attr *wq_init_attr)
++{
++	return ibv_create_wq(context, wq_init_attr);
++}
++
++static int
++mlx5_glue_destroy_wq(struct ibv_wq *wq)
++{
++	return ibv_destroy_wq(wq);
++}
++static int
++mlx5_glue_modify_wq(struct ibv_wq *wq, struct ibv_wq_attr *wq_attr)
++{
++	return ibv_modify_wq(wq, wq_attr);
++}
++
++static struct ibv_flow *
++mlx5_glue_create_flow(struct ibv_qp *qp, struct ibv_flow_attr *flow)
++{
++	return ibv_create_flow(qp, flow);
++}
++
++static int
++mlx5_glue_destroy_flow(struct ibv_flow *flow_id)
++{
++	return ibv_destroy_flow(flow_id);
++}
++
++static struct ibv_qp *
++mlx5_glue_create_qp(struct ibv_pd *pd, struct ibv_qp_init_attr *qp_init_attr)
++{
++	return ibv_create_qp(pd, qp_init_attr);
++}
++
++static struct ibv_qp *
++mlx5_glue_create_qp_ex(struct ibv_context *context,
++		       struct ibv_qp_init_attr_ex *qp_init_attr_ex)
++{
++	return ibv_create_qp_ex(context, qp_init_attr_ex);
++}
++
++static int
++mlx5_glue_destroy_qp(struct ibv_qp *qp)
++{
++	return ibv_destroy_qp(qp);
++}
++
++static int
++mlx5_glue_modify_qp(struct ibv_qp *qp, struct ibv_qp_attr *attr, int attr_mask)
++{
++	return ibv_modify_qp(qp, attr, attr_mask);
++}
++
++static struct ibv_mr *
++mlx5_glue_reg_mr(struct ibv_pd *pd, void *addr, size_t length, int access)
++{
++	return ibv_reg_mr(pd, addr, length, access);
++}
++
++static int
++mlx5_glue_dereg_mr(struct ibv_mr *mr)
++{
++	return ibv_dereg_mr(mr);
++}
++
++static struct ibv_counter_set *
++mlx5_glue_create_counter_set(struct ibv_context *context,
++			     struct ibv_counter_set_init_attr *init_attr)
++{
++#ifndef HAVE_IBV_DEVICE_COUNTERS_SET_SUPPORT
++	(void)context;
++	(void)init_attr;
++	return NULL;
++#else
++	return ibv_create_counter_set(context, init_attr);
++#endif
++}
++
++static int
++mlx5_glue_destroy_counter_set(struct ibv_counter_set *cs)
++{
++#ifndef HAVE_IBV_DEVICE_COUNTERS_SET_SUPPORT
++	(void)cs;
++	return ENOTSUP;
++#else
++	return ibv_destroy_counter_set(cs);
++#endif
++}
++
++static int
++mlx5_glue_describe_counter_set(struct ibv_context *context,
++			       uint16_t counter_set_id,
++			       struct ibv_counter_set_description *cs_desc)
++{
++#ifndef HAVE_IBV_DEVICE_COUNTERS_SET_SUPPORT
++	(void)context;
++	(void)counter_set_id;
++	(void)cs_desc;
++	return ENOTSUP;
++#else
++	return ibv_describe_counter_set(context, counter_set_id, cs_desc);
++#endif
++}
++
++static int
++mlx5_glue_query_counter_set(struct ibv_query_counter_set_attr *query_attr,
++			    struct ibv_counter_set_data *cs_data)
++{
++#ifndef HAVE_IBV_DEVICE_COUNTERS_SET_SUPPORT
++	(void)query_attr;
++	(void)cs_data;
++	return ENOTSUP;
++#else
++	return ibv_query_counter_set(query_attr, cs_data);
++#endif
++}
++
++static void
++mlx5_glue_ack_async_event(struct ibv_async_event *event)
++{
++	ibv_ack_async_event(event);
++}
++
++static int
++mlx5_glue_get_async_event(struct ibv_context *context,
++			  struct ibv_async_event *event)
++{
++	return ibv_get_async_event(context, event);
++}
++
++static const char *
++mlx5_glue_port_state_str(enum ibv_port_state port_state)
++{
++	return ibv_port_state_str(port_state);
++}
++
++static struct ibv_cq *
++mlx5_glue_cq_ex_to_cq(struct ibv_cq_ex *cq)
++{
++	return ibv_cq_ex_to_cq(cq);
++}
++
++static struct ibv_cq_ex *
++mlx5_glue_dv_create_cq(struct ibv_context *context,
++		       struct ibv_cq_init_attr_ex *cq_attr,
++		       struct mlx5dv_cq_init_attr *mlx5_cq_attr)
++{
++	return mlx5dv_create_cq(context, cq_attr, mlx5_cq_attr);
++}
++
++static int
++mlx5_glue_dv_query_device(struct ibv_context *ctx,
++			  struct mlx5dv_context *attrs_out)
++{
++	return mlx5dv_query_device(ctx, attrs_out);
++}
++
++static int
++mlx5_glue_dv_set_context_attr(struct ibv_context *ibv_ctx,
++			      enum mlx5dv_set_ctx_attr_type type, void *attr)
++{
++	return mlx5dv_set_context_attr(ibv_ctx, type, attr);
++}
++
++static int
++mlx5_glue_dv_init_obj(struct mlx5dv_obj *obj, uint64_t obj_type)
++{
++	return mlx5dv_init_obj(obj, obj_type);
++}
++
++const struct mlx5_glue *mlx5_glue = &(const struct mlx5_glue){
++	.fork_init = mlx5_glue_fork_init,
++	.alloc_pd = mlx5_glue_alloc_pd,
++	.dealloc_pd = mlx5_glue_dealloc_pd,
++	.get_device_list = mlx5_glue_get_device_list,
++	.free_device_list = mlx5_glue_free_device_list,
++	.open_device = mlx5_glue_open_device,
++	.close_device = mlx5_glue_close_device,
++	.get_device_name = mlx5_glue_get_device_name,
++	.query_device = mlx5_glue_query_device,
++	.query_device_ex = mlx5_glue_query_device_ex,
++	.query_port = mlx5_glue_query_port,
++	.create_comp_channel = mlx5_glue_create_comp_channel,
++	.destroy_comp_channel = mlx5_glue_destroy_comp_channel,
++	.create_cq = mlx5_glue_create_cq,
++	.destroy_cq = mlx5_glue_destroy_cq,
++	.get_cq_event = mlx5_glue_get_cq_event,
++	.ack_cq_events = mlx5_glue_ack_cq_events,
++	.create_rwq_ind_table = mlx5_glue_create_rwq_ind_table,
++	.destroy_rwq_ind_table = mlx5_glue_destroy_rwq_ind_table,
++	.create_wq = mlx5_glue_create_wq,
++	.destroy_wq = mlx5_glue_destroy_wq,
++	.modify_wq = mlx5_glue_modify_wq,
++	.create_flow = mlx5_glue_create_flow,
++	.destroy_flow = mlx5_glue_destroy_flow,
++	.create_qp = mlx5_glue_create_qp,
++	.create_qp_ex = mlx5_glue_create_qp_ex,
++	.destroy_qp = mlx5_glue_destroy_qp,
++	.modify_qp = mlx5_glue_modify_qp,
++	.reg_mr = mlx5_glue_reg_mr,
++	.dereg_mr = mlx5_glue_dereg_mr,
++	.create_counter_set = mlx5_glue_create_counter_set,
++	.destroy_counter_set = mlx5_glue_destroy_counter_set,
++	.describe_counter_set = mlx5_glue_describe_counter_set,
++	.query_counter_set = mlx5_glue_query_counter_set,
++	.ack_async_event = mlx5_glue_ack_async_event,
++	.get_async_event = mlx5_glue_get_async_event,
++	.port_state_str = mlx5_glue_port_state_str,
++	.cq_ex_to_cq = mlx5_glue_cq_ex_to_cq,
++	.dv_create_cq = mlx5_glue_dv_create_cq,
++	.dv_query_device = mlx5_glue_dv_query_device,
++	.dv_set_context_attr = mlx5_glue_dv_set_context_attr,
++	.dv_init_obj = mlx5_glue_dv_init_obj,
++};
+diff --git a/dpdk-17.11/drivers/net/mlx5/mlx5_glue.h b/dpdk-17.11/drivers/net/mlx5/mlx5_glue.h
+new file mode 100644
+index 0000000..67bd8d0
+--- /dev/null
++++ b/dpdk-17.11/drivers/net/mlx5/mlx5_glue.h
+@@ -0,0 +1,107 @@
++/* SPDX-License-Identifier: BSD-3-Clause
++ * Copyright 2018 6WIND S.A.
++ * Copyright 2018 Mellanox Technologies, Ltd.
++ */
++
++#ifndef MLX5_GLUE_H_
++#define MLX5_GLUE_H_
++
++#include <stdint.h>
++
++/* Verbs headers do not support -pedantic. */
++#ifdef PEDANTIC
++#pragma GCC diagnostic ignored "-Wpedantic"
++#endif
++#include <infiniband/mlx5dv.h>
++#include <infiniband/verbs.h>
++#ifdef PEDANTIC
++#pragma GCC diagnostic error "-Wpedantic"
++#endif
++
++#ifndef HAVE_IBV_DEVICE_COUNTERS_SET_SUPPORT
++struct ibv_counter_set;
++struct ibv_counter_set_data;
++struct ibv_counter_set_description;
++struct ibv_counter_set_init_attr;
++struct ibv_query_counter_set_attr;
++#endif
++
++struct mlx5_glue {
++	int (*fork_init)(void);
++	struct ibv_pd *(*alloc_pd)(struct ibv_context *context);
++	int (*dealloc_pd)(struct ibv_pd *pd);
++	struct ibv_device **(*get_device_list)(int *num_devices);
++	void (*free_device_list)(struct ibv_device **list);
++	struct ibv_context *(*open_device)(struct ibv_device *device);
++	int (*close_device)(struct ibv_context *context);
++	const char *(*get_device_name)(struct ibv_device *device);
++	int (*query_device)(struct ibv_context *context,
++			    struct ibv_device_attr *device_attr);
++	int (*query_device_ex)(struct ibv_context *context,
++			       const struct ibv_query_device_ex_input *input,
++			       struct ibv_device_attr_ex *attr);
++	int (*query_port)(struct ibv_context *context, uint8_t port_num,
++			  struct ibv_port_attr *port_attr);
++	struct ibv_comp_channel *(*create_comp_channel)
++		(struct ibv_context *context);
++	int (*destroy_comp_channel)(struct ibv_comp_channel *channel);
++	struct ibv_cq *(*create_cq)(struct ibv_context *context, int cqe,
++				    void *cq_context,
++				    struct ibv_comp_channel *channel,
++				    int comp_vector);
++	int (*destroy_cq)(struct ibv_cq *cq);
++	int (*get_cq_event)(struct ibv_comp_channel *channel,
++			    struct ibv_cq **cq, void **cq_context);
++	void (*ack_cq_events)(struct ibv_cq *cq, unsigned int nevents);
++	struct ibv_rwq_ind_table *(*create_rwq_ind_table)
++		(struct ibv_context *context,
++		 struct ibv_rwq_ind_table_init_attr *init_attr);
++	int (*destroy_rwq_ind_table)(struct ibv_rwq_ind_table *rwq_ind_table);
++	struct ibv_wq *(*create_wq)(struct ibv_context *context,
++				    struct ibv_wq_init_attr *wq_init_attr);
++	int (*destroy_wq)(struct ibv_wq *wq);
++	int (*modify_wq)(struct ibv_wq *wq, struct ibv_wq_attr *wq_attr);
++	struct ibv_flow *(*create_flow)(struct ibv_qp *qp,
++					struct ibv_flow_attr *flow);
++	int (*destroy_flow)(struct ibv_flow *flow_id);
++	struct ibv_qp *(*create_qp)(struct ibv_pd *pd,
++				    struct ibv_qp_init_attr *qp_init_attr);
++	struct ibv_qp *(*create_qp_ex)
++		(struct ibv_context *context,
++		 struct ibv_qp_init_attr_ex *qp_init_attr_ex);
++	int (*destroy_qp)(struct ibv_qp *qp);
++	int (*modify_qp)(struct ibv_qp *qp, struct ibv_qp_attr *attr,
++			 int attr_mask);
++	struct ibv_mr *(*reg_mr)(struct ibv_pd *pd, void *addr,
++				 size_t length, int access);
++	int (*dereg_mr)(struct ibv_mr *mr);
++	struct ibv_counter_set *(*create_counter_set)
++		(struct ibv_context *context,
++		 struct ibv_counter_set_init_attr *init_attr);
++	int (*destroy_counter_set)(struct ibv_counter_set *cs);
++	int (*describe_counter_set)
++		(struct ibv_context *context,
++		 uint16_t counter_set_id,
++		 struct ibv_counter_set_description *cs_desc);
++	int (*query_counter_set)(struct ibv_query_counter_set_attr *query_attr,
++				 struct ibv_counter_set_data *cs_data);
++	void (*ack_async_event)(struct ibv_async_event *event);
++	int (*get_async_event)(struct ibv_context *context,
++			       struct ibv_async_event *event);
++	const char *(*port_state_str)(enum ibv_port_state port_state);
++	struct ibv_cq *(*cq_ex_to_cq)(struct ibv_cq_ex *cq);
++	struct ibv_cq_ex *(*dv_create_cq)
++		(struct ibv_context *context,
++		 struct ibv_cq_init_attr_ex *cq_attr,
++		 struct mlx5dv_cq_init_attr *mlx5_cq_attr);
++	int (*dv_query_device)(struct ibv_context *ctx_in,
++			       struct mlx5dv_context *attrs_out);
++	int (*dv_set_context_attr)(struct ibv_context *ibv_ctx,
++				   enum mlx5dv_set_ctx_attr_type type,
++				   void *attr);
++	int (*dv_init_obj)(struct mlx5dv_obj *obj, uint64_t obj_type);
++};
++
++const struct mlx5_glue *mlx5_glue;
++
++#endif /* MLX5_GLUE_H_ */
+diff --git a/dpdk-17.11/drivers/net/mlx5/mlx5_mr.c b/dpdk-17.11/drivers/net/mlx5/mlx5_mr.c
+index 6b29eed..dea540a 100644
+--- a/dpdk-17.11/drivers/net/mlx5/mlx5_mr.c
++++ b/dpdk-17.11/drivers/net/mlx5/mlx5_mr.c
+@@ -46,6 +46,7 @@
+ 
+ #include "mlx5.h"
+ #include "mlx5_rxtx.h"
++#include "mlx5_glue.h"
+ 
+ struct mlx5_check_mempool_data {
+ 	int ret;
+@@ -305,8 +306,8 @@ struct mlx5_mr*
+ 	DEBUG("mempool %p using start=%p end=%p size=%zu for MR",
+ 	      (void *)mp, (void *)start, (void *)end,
+ 	      (size_t)(end - start));
+-	mr->mr = ibv_reg_mr(priv->pd, (void *)start, end - start,
+-			    IBV_ACCESS_LOCAL_WRITE);
++	mr->mr = mlx5_glue->reg_mr(priv->pd, (void *)start, end - start,
++				   IBV_ACCESS_LOCAL_WRITE);
+ 	mr->mp = mp;
+ 	mr->lkey = rte_cpu_to_be_32(mr->mr->lkey);
+ 	mr->start = start;
+@@ -364,7 +365,7 @@ struct mlx5_mr*
+ 	DEBUG("Memory Region %p refcnt: %d",
+ 	      (void *)mr, rte_atomic32_read(&mr->refcnt));
+ 	if (rte_atomic32_dec_and_test(&mr->refcnt)) {
+-		claim_zero(ibv_dereg_mr(mr->mr));
++		claim_zero(mlx5_glue->dereg_mr(mr->mr));
+ 		LIST_REMOVE(mr, next);
+ 		rte_free(mr);
+ 		return 0;
+diff --git a/dpdk-17.11/drivers/net/mlx5/mlx5_rxq.c b/dpdk-17.11/drivers/net/mlx5/mlx5_rxq.c
+index 85399ef..f5778b7 100644
+--- a/dpdk-17.11/drivers/net/mlx5/mlx5_rxq.c
++++ b/dpdk-17.11/drivers/net/mlx5/mlx5_rxq.c
+@@ -63,6 +63,7 @@
+ #include "mlx5_utils.h"
+ #include "mlx5_autoconf.h"
+ #include "mlx5_defs.h"
++#include "mlx5_glue.h"
+ 
+ /* Default RSS hash key also used for ConnectX-3. */
+ uint8_t rss_hash_default_key[] = {
+@@ -526,13 +527,13 @@
+ 		ret = EINVAL;
+ 		goto exit;
+ 	}
+-	ret = ibv_get_cq_event(rxq_ibv->channel, &ev_cq, &ev_ctx);
++	ret = mlx5_glue->get_cq_event(rxq_ibv->channel, &ev_cq, &ev_ctx);
+ 	if (ret || ev_cq != rxq_ibv->cq) {
+ 		ret = EINVAL;
+ 		goto exit;
+ 	}
+ 	rxq_data->cq_arm_sn++;
+-	ibv_ack_cq_events(rxq_ibv->cq, 1);
++	mlx5_glue->ack_cq_events(rxq_ibv->cq, 1);
+ exit:
+ 	if (rxq_ibv)
+ 		mlx5_priv_rxq_ibv_release(priv, rxq_ibv);
+@@ -597,7 +598,7 @@ struct mlx5_rxq_ibv*
+ 		}
+ 	}
+ 	if (rxq_ctrl->irq) {
+-		tmpl->channel = ibv_create_comp_channel(priv->ctx);
++		tmpl->channel = mlx5_glue->create_comp_channel(priv->ctx);
+ 		if (!tmpl->channel) {
+ 			ERROR("%p: Comp Channel creation failure",
+ 			      (void *)rxq_ctrl);
+@@ -625,8 +626,9 @@ struct mlx5_rxq_ibv*
+ 	} else if (priv->cqe_comp && rxq_data->hw_timestamp) {
+ 		DEBUG("Rx CQE compression is disabled for HW timestamp");
+ 	}
+-	tmpl->cq = ibv_cq_ex_to_cq(mlx5dv_create_cq(priv->ctx, &attr.cq.ibv,
+-						    &attr.cq.mlx5));
++	tmpl->cq = mlx5_glue->cq_ex_to_cq
++		(mlx5_glue->dv_create_cq(priv->ctx, &attr.cq.ibv,
++					 &attr.cq.mlx5));
+ 	if (tmpl->cq == NULL) {
+ 		ERROR("%p: CQ creation failure", (void *)rxq_ctrl);
+ 		goto error;
+@@ -662,7 +664,7 @@ struct mlx5_rxq_ibv*
+ 		attr.wq.comp_mask |= IBV_WQ_INIT_ATTR_FLAGS;
+ 	}
+ #endif
+-	tmpl->wq = ibv_create_wq(priv->ctx, &attr.wq);
++	tmpl->wq = mlx5_glue->create_wq(priv->ctx, &attr.wq);
+ 	if (tmpl->wq == NULL) {
+ 		ERROR("%p: WQ creation failure", (void *)rxq_ctrl);
+ 		goto error;
+@@ -686,7 +688,7 @@ struct mlx5_rxq_ibv*
+ 		.attr_mask = IBV_WQ_ATTR_STATE,
+ 		.wq_state = IBV_WQS_RDY,
+ 	};
+-	ret = ibv_modify_wq(tmpl->wq, &mod);
++	ret = mlx5_glue->modify_wq(tmpl->wq, &mod);
+ 	if (ret) {
+ 		ERROR("%p: WQ state to IBV_WQS_RDY failed",
+ 		      (void *)rxq_ctrl);
+@@ -696,7 +698,7 @@ struct mlx5_rxq_ibv*
+ 	obj.cq.out = &cq_info;
+ 	obj.rwq.in = tmpl->wq;
+ 	obj.rwq.out = &rwq;
+-	ret = mlx5dv_init_obj(&obj, MLX5DV_OBJ_CQ | MLX5DV_OBJ_RWQ);
++	ret = mlx5_glue->dv_init_obj(&obj, MLX5DV_OBJ_CQ | MLX5DV_OBJ_RWQ);
+ 	if (ret != 0)
+ 		goto error;
+ 	if (cq_info.cqe_size != RTE_CACHE_LINE_SIZE) {
+@@ -745,11 +747,11 @@ struct mlx5_rxq_ibv*
+ 	return tmpl;
+ error:
+ 	if (tmpl->wq)
+-		claim_zero(ibv_destroy_wq(tmpl->wq));
++		claim_zero(mlx5_glue->destroy_wq(tmpl->wq));
+ 	if (tmpl->cq)
+-		claim_zero(ibv_destroy_cq(tmpl->cq));
++		claim_zero(mlx5_glue->destroy_cq(tmpl->cq));
+ 	if (tmpl->channel)
+-		claim_zero(ibv_destroy_comp_channel(tmpl->channel));
++		claim_zero(mlx5_glue->destroy_comp_channel(tmpl->channel));
+ 	if (tmpl->mr)
+ 		priv_mr_release(priv, tmpl->mr);
+ 	return NULL;
+@@ -814,10 +816,11 @@ struct mlx5_rxq_ibv*
+ 	      (void *)rxq_ibv, rte_atomic32_read(&rxq_ibv->refcnt));
+ 	if (rte_atomic32_dec_and_test(&rxq_ibv->refcnt)) {
+ 		rxq_free_elts(rxq_ibv->rxq_ctrl);
+-		claim_zero(ibv_destroy_wq(rxq_ibv->wq));
+-		claim_zero(ibv_destroy_cq(rxq_ibv->cq));
++		claim_zero(mlx5_glue->destroy_wq(rxq_ibv->wq));
++		claim_zero(mlx5_glue->destroy_cq(rxq_ibv->cq));
+ 		if (rxq_ibv->channel)
+-			claim_zero(ibv_destroy_comp_channel(rxq_ibv->channel));
++			claim_zero(mlx5_glue->destroy_comp_channel
++				   (rxq_ibv->channel));
+ 		LIST_REMOVE(rxq_ibv, next);
+ 		rte_free(rxq_ibv);
+ 		return 0;
+@@ -1143,13 +1146,13 @@ struct mlx5_ind_table_ibv*
+ 	/* Finalise indirection table. */
+ 	for (j = 0; i != (unsigned int)(1 << wq_n); ++i, ++j)
+ 		wq[i] = wq[j];
+-	ind_tbl->ind_table = ibv_create_rwq_ind_table(
+-		priv->ctx,
+-		&(struct ibv_rwq_ind_table_init_attr){
++	ind_tbl->ind_table = mlx5_glue->create_rwq_ind_table
++		(priv->ctx,
++		 &(struct ibv_rwq_ind_table_init_attr){
+ 			.log_ind_tbl_size = wq_n,
+ 			.ind_tbl = wq,
+ 			.comp_mask = 0,
+-		});
++		 });
+ 	if (!ind_tbl->ind_table)
+ 		goto error;
+ 	rte_atomic32_inc(&ind_tbl->refcnt);
+@@ -1221,7 +1224,8 @@ struct mlx5_ind_table_ibv*
+ 	DEBUG("%p: Indirection table %p: refcnt %d", (void *)priv,
+ 	      (void *)ind_tbl, rte_atomic32_read(&ind_tbl->refcnt));
+ 	if (rte_atomic32_dec_and_test(&ind_tbl->refcnt))
+-		claim_zero(ibv_destroy_rwq_ind_table(ind_tbl->ind_table));
++		claim_zero(mlx5_glue->destroy_rwq_ind_table
++			   (ind_tbl->ind_table));
+ 	for (i = 0; i != ind_tbl->queues_n; ++i)
+ 		claim_nonzero(mlx5_priv_rxq_release(priv, ind_tbl->queues[i]));
+ 	if (!rte_atomic32_read(&ind_tbl->refcnt)) {
+@@ -1288,9 +1292,9 @@ struct mlx5_hrxq*
+ 		ind_tbl = mlx5_priv_ind_table_ibv_new(priv, queues, queues_n);
+ 	if (!ind_tbl)
+ 		return NULL;
+-	qp = ibv_create_qp_ex(
+-		priv->ctx,
+-		&(struct ibv_qp_init_attr_ex){
++	qp = mlx5_glue->create_qp_ex
++		(priv->ctx,
++		 &(struct ibv_qp_init_attr_ex){
+ 			.qp_type = IBV_QPT_RAW_PACKET,
+ 			.comp_mask =
+ 				IBV_QP_INIT_ATTR_PD |
+@@ -1304,7 +1308,7 @@ struct mlx5_hrxq*
+ 			},
+ 			.rwq_ind_tbl = ind_tbl->ind_table,
+ 			.pd = priv->pd,
+-		});
++		 });
+ 	if (!qp)
+ 		goto error;
+ 	hrxq = rte_calloc(__func__, 1, sizeof(*hrxq) + rss_key_len, 0);
+@@ -1323,7 +1327,7 @@ struct mlx5_hrxq*
+ error:
+ 	mlx5_priv_ind_table_ibv_release(priv, ind_tbl);
+ 	if (qp)
+-		claim_zero(ibv_destroy_qp(qp));
++		claim_zero(mlx5_glue->destroy_qp(qp));
+ 	return NULL;
+ }
+ 
+@@ -1391,7 +1395,7 @@ struct mlx5_hrxq*
+ 	DEBUG("%p: Hash Rx queue %p: refcnt %d", (void *)priv,
+ 	      (void *)hrxq, rte_atomic32_read(&hrxq->refcnt));
+ 	if (rte_atomic32_dec_and_test(&hrxq->refcnt)) {
+-		claim_zero(ibv_destroy_qp(hrxq->qp));
++		claim_zero(mlx5_glue->destroy_qp(hrxq->qp));
+ 		mlx5_priv_ind_table_ibv_release(priv, hrxq->ind_table);
+ 		LIST_REMOVE(hrxq, next);
+ 		rte_free(hrxq);
+diff --git a/dpdk-17.11/drivers/net/mlx5/mlx5_txq.c b/dpdk-17.11/drivers/net/mlx5/mlx5_txq.c
+index 9c5860f..52cf005 100644
+--- a/dpdk-17.11/drivers/net/mlx5/mlx5_txq.c
++++ b/dpdk-17.11/drivers/net/mlx5/mlx5_txq.c
+@@ -59,6 +59,7 @@
+ #include "mlx5.h"
+ #include "mlx5_rxtx.h"
+ #include "mlx5_autoconf.h"
++#include "mlx5_glue.h"
+ 
+ /**
+  * Allocate TX queue elements.
+@@ -324,7 +325,7 @@ struct mlx5_txq_ibv*
+ 		((desc / MLX5_TX_COMP_THRESH) - 1) : 1;
+ 	if (priv->mps == MLX5_MPW_ENHANCED)
+ 		cqe_n += MLX5_TX_COMP_THRESH_INLINE_DIV;
+-	tmpl.cq = ibv_create_cq(priv->ctx, cqe_n, NULL, NULL, 0);
++	tmpl.cq = mlx5_glue->create_cq(priv->ctx, cqe_n, NULL, NULL, 0);
+ 	if (tmpl.cq == NULL) {
+ 		ERROR("%p: CQ creation failure", (void *)txq_ctrl);
+ 		goto error;
+@@ -365,7 +366,7 @@ struct mlx5_txq_ibv*
+ 		attr.init.max_tso_header = txq_ctrl->max_tso_header;
+ 		attr.init.comp_mask |= IBV_QP_INIT_ATTR_MAX_TSO_HEADER;
+ 	}
+-	tmpl.qp = ibv_create_qp_ex(priv->ctx, &attr.init);
++	tmpl.qp = mlx5_glue->create_qp_ex(priv->ctx, &attr.init);
+ 	if (tmpl.qp == NULL) {
+ 		ERROR("%p: QP creation failure", (void *)txq_ctrl);
+ 		goto error;
+@@ -376,7 +377,8 @@ struct mlx5_txq_ibv*
+ 		/* Primary port number. */
+ 		.port_num = priv->port
+ 	};
+-	ret = ibv_modify_qp(tmpl.qp, &attr.mod, (IBV_QP_STATE | IBV_QP_PORT));
++	ret = mlx5_glue->modify_qp(tmpl.qp, &attr.mod,
++				   (IBV_QP_STATE | IBV_QP_PORT));
+ 	if (ret) {
+ 		ERROR("%p: QP state to IBV_QPS_INIT failed", (void *)txq_ctrl);
+ 		goto error;
+@@ -384,13 +386,13 @@ struct mlx5_txq_ibv*
+ 	attr.mod = (struct ibv_qp_attr){
+ 		.qp_state = IBV_QPS_RTR
+ 	};
+-	ret = ibv_modify_qp(tmpl.qp, &attr.mod, IBV_QP_STATE);
++	ret = mlx5_glue->modify_qp(tmpl.qp, &attr.mod, IBV_QP_STATE);
+ 	if (ret) {
+ 		ERROR("%p: QP state to IBV_QPS_RTR failed", (void *)txq_ctrl);
+ 		goto error;
+ 	}
+ 	attr.mod.qp_state = IBV_QPS_RTS;
+-	ret = ibv_modify_qp(tmpl.qp, &attr.mod, IBV_QP_STATE);
++	ret = mlx5_glue->modify_qp(tmpl.qp, &attr.mod, IBV_QP_STATE);
+ 	if (ret) {
+ 		ERROR("%p: QP state to IBV_QPS_RTS failed", (void *)txq_ctrl);
+ 		goto error;
+@@ -405,7 +407,7 @@ struct mlx5_txq_ibv*
+ 	obj.cq.out = &cq_info;
+ 	obj.qp.in = tmpl.qp;
+ 	obj.qp.out = &qp;
+-	ret = mlx5dv_init_obj(&obj, MLX5DV_OBJ_CQ | MLX5DV_OBJ_QP);
++	ret = mlx5_glue->dv_init_obj(&obj, MLX5DV_OBJ_CQ | MLX5DV_OBJ_QP);
+ 	if (ret != 0)
+ 		goto error;
+ 	if (cq_info.cqe_size != RTE_CACHE_LINE_SIZE) {
+@@ -442,9 +444,9 @@ struct mlx5_txq_ibv*
+ 	return txq_ibv;
+ error:
+ 	if (tmpl.cq)
+-		claim_zero(ibv_destroy_cq(tmpl.cq));
++		claim_zero(mlx5_glue->destroy_cq(tmpl.cq));
+ 	if (tmpl.qp)
+-		claim_zero(ibv_destroy_qp(tmpl.qp));
++		claim_zero(mlx5_glue->destroy_qp(tmpl.qp));
+ 	return NULL;
+ }
+ 
+@@ -497,8 +499,8 @@ struct mlx5_txq_ibv*
+ 	DEBUG("%p: Verbs Tx queue %p: refcnt %d", (void *)priv,
+ 	      (void *)txq_ibv, rte_atomic32_read(&txq_ibv->refcnt));
+ 	if (rte_atomic32_dec_and_test(&txq_ibv->refcnt)) {
+-		claim_zero(ibv_destroy_qp(txq_ibv->qp));
+-		claim_zero(ibv_destroy_cq(txq_ibv->cq));
++		claim_zero(mlx5_glue->destroy_qp(txq_ibv->qp));
++		claim_zero(mlx5_glue->destroy_cq(txq_ibv->cq));
+ 		LIST_REMOVE(txq_ibv, next);
+ 		rte_free(txq_ibv);
+ 		return 0;
+diff --git a/dpdk-17.11/drivers/net/mlx5/mlx5_vlan.c b/dpdk-17.11/drivers/net/mlx5/mlx5_vlan.c
+index 6fc315e..841f238 100644
+--- a/dpdk-17.11/drivers/net/mlx5/mlx5_vlan.c
++++ b/dpdk-17.11/drivers/net/mlx5/mlx5_vlan.c
+@@ -36,12 +36,23 @@
+ #include <assert.h>
+ #include <stdint.h>
+ 
++/* Verbs headers do not support -pedantic. */
++#ifdef PEDANTIC
++#pragma GCC diagnostic ignored "-Wpedantic"
++#endif
++#include <infiniband/mlx5dv.h>
++#include <infiniband/verbs.h>
++#ifdef PEDANTIC
++#pragma GCC diagnostic error "-Wpedantic"
++#endif
++
+ #include <rte_ethdev.h>
+ #include <rte_common.h>
+ 
+ #include "mlx5_utils.h"
+ #include "mlx5.h"
+ #include "mlx5_autoconf.h"
++#include "mlx5_glue.h"
+ 
+ /**
+  * DPDK callback to configure a VLAN filter.
+@@ -133,7 +144,7 @@
+ 		.flags = vlan_offloads,
+ 	};
+ 
+-	err = ibv_modify_wq(rxq_ctrl->ibv->wq, &mod);
++	err = mlx5_glue->modify_wq(rxq_ctrl->ibv->wq, &mod);
+ 	if (err) {
+ 		ERROR("%p: failed to modified stripping mode: %s",
+ 		      (void *)priv, strerror(err));
+-- 
+1.8.3.1
+

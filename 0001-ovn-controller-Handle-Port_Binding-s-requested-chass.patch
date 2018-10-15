@@ -1,0 +1,144 @@
+From 656208e735cf076a9166792cb82a46383f1ff6fe Mon Sep 17 00:00:00 2001
+From: Numan Siddique <nusiddiq@redhat.com>
+Date: Tue, 20 Mar 2018 16:59:42 +0530
+Subject: [PATCH] ovn-controller: Handle Port_Binding's "requested-chassis"
+ option in physical.c
+
+When a Logical_Switch_Port P's options is set with 'requested-chassis=hv1'
+and if the user has bound this logical port to two OVS interfaces each in
+different host (eg. hv1 and hv2), then ovn-controller in hv1 sets the
+P's Port_Binding.chassis to hv1 which is as expected. But on hv2, ovn-controller
+is adding OF flows in table 0 and table 65 for the OVS interface instead of
+considering 'P' as a remote port. When another logical port bound on hv2,
+pings to the logical port 'P', the packet gets delivered to hv2 OVS interface
+instead of hv1 OVS interface, which is wrong.
+
+This scenario is most likely to happen when requested-chassis option is used
+by CMS during migration of a VM from one chassis to another.
+
+This patch fixes this issue by checking the Port_Binding's "requested-chassis"
+option in physical.c before adding the flows in table 0 an 65.
+
+Reported-by: Marcin Mirecki <mmirecki@redhat.com>
+Reported-at: https://mail.openvswitch.org/pipermail/ovs-dev/2018-March/345266.html
+Signed-off-by: Numan Siddique <nusiddiq@redhat.com>
+Tested-by: Marcin Mirecki <mmirecki@redhat.com>
+Signed-off-by: Ben Pfaff <blp@ovn.org>
+---
+ ovn/controller/physical.c | 11 +++++++++++
+ tests/ovn.at              | 32 +++++++++++++++++++++++++++-----
+ 2 files changed, 38 insertions(+), 5 deletions(-)
+
+diff --git a/ovn/controller/physical.c b/ovn/controller/physical.c
+index 5a80e2cda..8c92c1d9b 100644
+--- a/ovn/controller/physical.c
++++ b/ovn/controller/physical.c
+@@ -466,6 +466,17 @@ consider_port_binding(struct controller_ctx *ctx,
+     } else {
+         ofport = u16_to_ofp(simap_get(&localvif_to_ofport,
+                                       binding->logical_port));
++        const char *requested_chassis = smap_get(&binding->options,
++                                                 "requested-chassis");
++        if (ofport && requested_chassis && requested_chassis[0] &&
++            strcmp(requested_chassis, chassis->name) &&
++            strcmp(requested_chassis, chassis->hostname)) {
++            /* Even though there is an ofport for this port_binding, it is
++             * requested on a different chassis. So ignore this ofport.
++             */
++            ofport = 0;
++        }
++
+         if ((!strcmp(binding->type, "localnet")
+             || !strcmp(binding->type, "l2gateway"))
+             && ofport && binding->tag) {
+diff --git a/tests/ovn.at b/tests/ovn.at
+index 83c0e9d6e..8ba268668 100644
+--- a/tests/ovn.at
++++ b/tests/ovn.at
+@@ -9085,13 +9085,15 @@ sim_add hv1
+ as hv1
+ ovs-vsctl add-br br-phys
+ ovn_attach n1 br-phys 192.168.0.11
+-ovs-vsctl -- add-port br-int hv1-vif0
++ovs-vsctl -- add-port br-int hv1-vif0 -- \
++set Interface hv1-vif0 ofport-request=1
+ 
+ sim_add hv2
+ as hv2
+ ovs-vsctl add-br br-phys
+ ovn_attach n1 br-phys 192.168.0.12
+-ovs-vsctl -- add-port br-int hv2-vif0
++ovs-vsctl -- add-port br-int hv2-vif0 -- \
++set Interface hv2-vif0 ofport-request=1
+ 
+ # Allow only chassis hv1 to bind logical port lsp0.
+ ovn-nbctl lsp-set-options lsp0 requested-chassis=hv1
+@@ -9111,7 +9113,11 @@ ovs-vsctl set interface hv2-vif0 external-ids:iface-id=lsp0
+ OVS_WAIT_UNTIL([test 1 = $(grep -c "Not claiming lport lsp0" hv2/ovn-controller.log)])
+ AT_CHECK([test x$(ovn-sbctl --bare --columns chassis find port_binding logical_port=lsp0) = x], [0], [])
+ 
+-# (2) Chassis hv1 should bind lsp0 when physical to logical mapping exists on hv1.
++# (2) Chassis hv2 should not add flows in OFTABLE_PHY_TO_LOG and OFTABLE_LOG_TO_PHY tables.
++AT_CHECK([as hv2 ovs-ofctl dump-flows br-int table=0 | grep in_port=1], [1], [])
++AT_CHECK([as hv2 ovs-ofctl dump-flows br-int table=65 | grep output], [1], [])
++
++# (3) Chassis hv1 should bind lsp0 when physical to logical mapping exists on hv1.
+ echo "verifying that hv1 binds lsp0 when hv1 physical/logical mapping is added"
+ as hv1
+ ovs-vsctl set interface hv1-vif0 external-ids:iface-id=lsp0
+@@ -9119,7 +9125,12 @@ ovs-vsctl set interface hv1-vif0 external-ids:iface-id=lsp0
+ OVS_WAIT_UNTIL([test 1 = $(grep -c "Claiming lport lsp0" hv1/ovn-controller.log)])
+ AT_CHECK([test $(ovn-sbctl --bare --columns chassis find port_binding logical_port=lsp0) = "$hv1_uuid"], [0], [])
+ 
+-# (3) Chassis hv1 should release lsp0 binding and chassis hv2 should bind lsp0 when
++# (4) Chassis hv1 should add flows in OFTABLE_PHY_TO_LOG and OFTABLE_LOG_TO_PHY tables.
++as hv1 ovs-ofctl dump-flows br-int
++AT_CHECK([as hv1 ovs-ofctl dump-flows br-int table=0 | grep in_port=1], [0], [ignore])
++AT_CHECK([as hv1 ovs-ofctl dump-flows br-int table=65 | grep actions=output:1], [0], [ignore])
++
++# (5) Chassis hv1 should release lsp0 binding and chassis hv2 should bind lsp0 when
+ # the requested chassis for lsp0 is changed from hv1 to hv2.
+ echo "verifying that lsp0 binding moves when requested-chassis is changed"
+ 
+@@ -9127,6 +9138,13 @@ ovn-nbctl lsp-set-options lsp0 requested-chassis=hv2
+ OVS_WAIT_UNTIL([test 1 = $(grep -c "Releasing lport lsp0 from this chassis" hv1/ovn-controller.log)])
+ OVS_WAIT_UNTIL([test $(ovn-sbctl --bare --columns chassis find port_binding logical_port=lsp0) = "$hv2_uuid"])
+ 
++# (6) Chassis hv2 should add flows and hv1 should not.
++AT_CHECK([as hv2 ovs-ofctl dump-flows br-int table=0 | grep in_port=1], [0], [ignore])
++AT_CHECK([as hv2 ovs-ofctl dump-flows br-int table=65 | grep actions=output:1], [0], [ignore])
++
++AT_CHECK([as hv1 ovs-ofctl dump-flows br-int table=0 | grep in_port=1], [1], [])
++AT_CHECK([as hv1 ovs-ofctl dump-flows br-int table=65 | grep output], [1], [])
++
+ OVN_CLEANUP([hv1],[hv2])
+ 
+ AT_CLEANUP
+@@ -9143,7 +9161,7 @@ sim_add hv1
+ as hv1
+ ovs-vsctl add-br br-phys
+ ovn_attach n1 br-phys 192.168.0.11
+-ovs-vsctl -- add-port br-int hv1-vif0
++ovs-vsctl -- add-port br-int hv1-vif0 -- set Interface hv1-vif0 ofport-request=1
+ 
+ hv1_hostname=$(ovn-sbctl --bare --columns hostname find Chassis name=hv1)
+ echo "hv1_hostname=${hv1_hostname}"
+@@ -9154,11 +9172,15 @@ hv1_uuid=$(ovn-sbctl --bare --columns _uuid find Chassis name=hv1)
+ echo "hv1_uuid=${hv1_uuid}"
+ OVS_WAIT_UNTIL([test 1 = $(grep -c "Claiming lport lsp0" hv1/ovn-controller.log)])
+ AT_CHECK([test x$(ovn-sbctl --bare --columns chassis find port_binding logical_port=lsp0) = x"$hv1_uuid"], [0], [])
++AT_CHECK([as hv1 ovs-ofctl dump-flows br-int table=0 | grep in_port=1], [0], [ignore])
++AT_CHECK([as hv1 ovs-ofctl dump-flows br-int table=65 | grep actions=output:1], [0], [ignore])
+ 
+ ovn-nbctl --wait=hv --timeout=3 lsp-set-options lsp0 requested-chassis=non-existant-chassis
+ OVS_WAIT_UNTIL([test 1 = $(grep -c "Releasing lport lsp0 from this chassis" hv1/ovn-controller.log)])
+ ovn-nbctl --wait=hv --timeout=3 sync
+ AT_CHECK([test x$(ovn-sbctl --bare --columns chassis find port_binding logical_port=lsp0) = x], [0], [])
++AT_CHECK([as hv1 ovs-ofctl dump-flows br-int table=0 | grep in_port=1], [1], [])
++AT_CHECK([as hv1 ovs-ofctl dump-flows br-int table=65 | grep output], [1], [])
+ 
+ OVN_CLEANUP([hv1])
+ 
+-- 
+2.14.3
+

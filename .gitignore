@@ -30,3 +30,6 @@
 /openvswitch-2.8.1.tar.gz
 /openvswitch-2.9.0.tar.gz
 /dpdk-17.11.tar.xz
+Pygments-1.4.tar.gz
+Sphinx-1.1.3.tar.gz
+docutils-0.12.tar.gz

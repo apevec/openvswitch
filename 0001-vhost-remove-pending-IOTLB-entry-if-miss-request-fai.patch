@@ -1,0 +1,81 @@
+From 82b9c1540348b6be7996203065e10421e953cea9 Mon Sep 17 00:00:00 2001
+From: Maxime Coquelin <maxime.coquelin@redhat.com>
+Date: Mon, 5 Feb 2018 16:04:57 +0100
+Subject: [PATCH] vhost: remove pending IOTLB entry if miss request failed
+
+In case vhost_user_iotlb_miss returns an error, the pending IOTLB
+entry has to be removed from the list as no IOTLB update will be
+received.
+
+Fixes: fed67a20ac94 ("vhost: introduce guest IOVA to backend VA helper")
+Cc: stable@dpdk.org
+
+Suggested-by: Tiwei Bie <tiwei.bie@intel.com>
+Signed-off-by: Maxime Coquelin <maxime.coquelin@redhat.com>
+---
+ lib/librte_vhost/iotlb.c |  2 +-
+ lib/librte_vhost/iotlb.h |  3 +++
+ lib/librte_vhost/vhost.c | 13 ++++++++++---
+ 3 files changed, 14 insertions(+), 4 deletions(-)
+
+diff --git a/dpdk-17.11/lib/librte_vhost/iotlb.c b/dpdk-17.11/lib/librte_vhost/iotlb.c
+index 72cd27df8..c11ebcaac 100644
+--- a/dpdk-17.11/lib/librte_vhost/iotlb.c
++++ b/dpdk-17.11/lib/librte_vhost/iotlb.c
+@@ -120,7 +120,7 @@ vhost_user_iotlb_pending_insert(struct vhost_virtqueue *vq,
+ 	rte_rwlock_write_unlock(&vq->iotlb_pending_lock);
+ }
+ 
+-static void
++void
+ vhost_user_iotlb_pending_remove(struct vhost_virtqueue *vq,
+ 				uint64_t iova, uint64_t size, uint8_t perm)
+ {
+diff --git a/dpdk-17.11/lib/librte_vhost/iotlb.h b/dpdk-17.11/lib/librte_vhost/iotlb.h
+index f1a050e44..e7083e37b 100644
+--- a/dpdk-17.11/lib/librte_vhost/iotlb.h
++++ b/dpdk-17.11/lib/librte_vhost/iotlb.h
+@@ -71,6 +71,9 @@ bool vhost_user_iotlb_pending_miss(struct vhost_virtqueue *vq, uint64_t iova,
+ 						uint8_t perm);
+ void vhost_user_iotlb_pending_insert(struct vhost_virtqueue *vq, uint64_t iova,
+ 						uint8_t perm);
++void vhost_user_iotlb_pending_remove(struct vhost_virtqueue *vq, uint64_t iova,
++						uint64_t size, uint8_t perm);
++
+ int vhost_user_iotlb_init(struct virtio_net *dev, int vq_index);
+ 
+ #endif /* _VHOST_IOTLB_H_ */
+diff --git a/dpdk-17.11/lib/librte_vhost/vhost.c b/dpdk-17.11/lib/librte_vhost/vhost.c
+index a31ca5002..a407067e2 100644
+--- a/dpdk-17.11/lib/librte_vhost/vhost.c
++++ b/dpdk-17.11/lib/librte_vhost/vhost.c
+@@ -42,7 +42,9 @@ __vhost_iova_to_vva(struct virtio_net *dev, struct vhost_virtqueue *vq,
+ 	if (tmp_size == size)
+ 		return vva;
+ 
+-	if (!vhost_user_iotlb_pending_miss(vq, iova + tmp_size, perm)) {
++	iova += tmp_size;
++
++	if (!vhost_user_iotlb_pending_miss(vq, iova, perm)) {
+ 		/*
+ 		 * iotlb_lock is read-locked for a full burst,
+ 		 * but it only protects the iotlb cache.
+@@ -52,8 +54,13 @@ __vhost_iova_to_vva(struct virtio_net *dev, struct vhost_virtqueue *vq,
+ 		 */
+ 		vhost_user_iotlb_rd_unlock(vq);
+ 
+-		vhost_user_iotlb_pending_insert(vq, iova + tmp_size, perm);
+-		vhost_user_iotlb_miss(dev, iova + tmp_size, perm);
++		vhost_user_iotlb_pending_insert(vq, iova, perm);
++		if (vhost_user_iotlb_miss(dev, iova, perm)) {
++			RTE_LOG(ERR, VHOST_CONFIG,
++				"IOTLB miss req failed for IOVA 0x%" PRIx64 "\n",
++				iova);
++			vhost_user_iotlb_pending_remove(vq, iova, 1, perm);
++		}
+ 
+ 		vhost_user_iotlb_rd_lock(vq);
+ 	}
+-- 
+2.14.3
+

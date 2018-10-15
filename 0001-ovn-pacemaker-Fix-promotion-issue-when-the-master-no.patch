@@ -1,0 +1,56 @@
+From c16e265713bef1c701bfce7608d68ab11695e286 Mon Sep 17 00:00:00 2001
+From: Numan Siddique <nusiddiq@redhat.com>
+Date: Thu, 17 May 2018 15:34:09 +0530
+Subject: [PATCH] ovn pacemaker: Fix promotion issue when the master node is
+ reset
+
+When a node 'A' in the pacemaker cluster running OVN db servers in
+master is brought down ungracefully ('echo b > /proc/sysrq_trigger'
+for example), pacemaker is not able to promote any other node to
+master in the cluster. When pacemaker selects a node B for instance to
+promote, it moves the IPAddr2 resource (i.e the master ip) to node
+'B'. As soon the node is configured with the IP address, when the
+issue is seen, the OVN db servers which were running as standy
+earlier, transitions to active. Ideally this should not have happened.
+The ovsdb-servers are expected to remain in standby until there are
+promoted. (This needs separate investigation). When the pacemaker
+calls the OVN OCF script's promote action, the ovsdb_server_promot
+function returns almost immediately without recording the present
+master. And later in the notify action it demotes back the OVN db
+servers since the last known master doesn't match with node 'B's
+hostname. This results in pacemaker promoting/demoting in a loop.
+
+This patch fixes the issue by not returning immediately when promote
+action is called if the OVN db servers are running as active. Now it
+would continue with the ovsdb_server_promot function and records the
+new master by setting proper master score ($CRM_MASTER -N $host_name
+-v ${master_score})
+
+This issue is not seen when a node is brought down gracefully as
+pacemaker before promoting a node, calls stop, start and then promote
+actions. Not sure why pacemaker doesn't call stop, start and promote
+actions when a node is reset ungracefully.
+
+Reported-at: https://bugzilla.redhat.com/show_bug.cgi?id=1579025
+Signed-off-by: Numan Siddique <nusiddiq@redhat.com>
+Signed-off-by: Russell Bryant <russell@ovn.org>
+---
+ ovn/utilities/ovndb-servers.ocf | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/ovn/utilities/ovndb-servers.ocf b/ovn/utilities/ovndb-servers.ocf
+index 164b6bce6..23dc70056 100755
+--- a/ovn/utilities/ovndb-servers.ocf
++++ b/ovn/utilities/ovndb-servers.ocf
+@@ -409,7 +409,7 @@ ovsdb_server_promote() {
+     rc=$?
+     case $rc in
+         ${OCF_SUCCESS}) ;;
+-        ${OCF_RUNNING_MASTER}) return ${OCF_SUCCESS};;
++        ${OCF_RUNNING_MASTER}) ;;
+         *)
+             ovsdb_server_master_update $OCF_RUNNING_MASTER
+             return ${rc}
+-- 
+2.17.0
+

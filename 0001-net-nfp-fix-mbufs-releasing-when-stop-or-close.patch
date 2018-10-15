@@ -1,0 +1,46 @@
+From 0c0e46c36bcc5dfe9d2aa605e1a5f714d45e0b7f Mon Sep 17 00:00:00 2001
+From: Alejandro Lucero <alejandro.lucero@netronome.com>
+Date: Mon, 23 Apr 2018 12:23:58 +0100
+Subject: [PATCH] net/nfp: fix mbufs releasing when stop or close
+
+PMDs have the responsibility of releasing mbufs sent through xmit burst
+function. NFP PMD attaches those sent mbufs to the TX ring structure,
+and it is at the next time a specific ring descriptor is going to be
+used when the previous linked mbuf, already transmitted at that point,
+is released. Those mbufs belonging to a chained mbuf got its own link
+to a ring descriptor, and they are released independently of the mbuf
+head of that chain.
+
+The problem is how those mbufs are released when the PMD is stopped or
+closed. Instead of releasing those mbufs as the xmit functions does,
+this is independently of being in a mbuf chain, the code calls
+rte_pktmbuf_free which will release not just the mbuf head in that
+chain but all the chained mbufs. The loop will try to release those
+mbufs which have already been released again when chained mbufs exist.
+
+This patch fixes the problem using rte_pktmbuf_free_seg instead.
+
+Fixes: b812daadad0d ("nfp: add Rx and Tx")
+Cc: stable@dpdk.org
+
+Signed-off-by: Alejandro Lucero <alejandro.lucero@netronome.com>
+---
+ drivers/net/nfp/nfp_net.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/dpdk-17.11/drivers/net/nfp/nfp_net.c b/dpdk-17.11/drivers/net/nfp/nfp_net.c
+index 2a4b006e0..a5875f230 100644
+--- a/dpdk-17.11/drivers/net/nfp/nfp_net.c
++++ b/dpdk-17.11/drivers/net/nfp/nfp_net.c
+@@ -263,7 +263,7 @@ nfp_net_tx_queue_release_mbufs(struct nfp_net_txq *txq)
+ 
+ 	for (i = 0; i < txq->tx_count; i++) {
+ 		if (txq->txbufs[i].mbuf) {
+-			rte_pktmbuf_free(txq->txbufs[i].mbuf);
++			rte_pktmbuf_free_seg(txq->txbufs[i].mbuf);
+ 			txq->txbufs[i].mbuf = NULL;
+ 		}
+ 	}
+-- 
+2.17.0
+

@@ -1,0 +1,209 @@
+From 2ed9bf330709e75c2f066f6ec13ece1ecdb4e9db Mon Sep 17 00:00:00 2001
+From: Aaron Conole <aconole@redhat.com>
+Date: Mon, 2 Apr 2018 14:24:34 -0400
+Subject: [PATCH] eal: abstract away the auxiliary vector
+
+Rather than attempting to load the contents of the auxv directly,
+prefer to use an exposed API - and if that doesn't exist then attempt
+to load the vector.  This is because on some systems, when a user
+is downgraded, the /proc/self/auxv file retains the old ownership
+and permissions.  The original method of /proc/self/auxv is retained.
+
+This also removes a potential abort() in the code when compiled with
+NDEBUG.  A quick parse of the code shows that many (if not all) of
+the CPU flag parsing isn't used internally, so it should be okay.
+
+Signed-off-by: Aaron Conole <aconole@redhat.com>
+Signed-off-by: Timothy Redaelli <tredaelli@redhat.com>
+---
+ lib/librte_eal/common/arch/arm/rte_cpuflags.c | 20 +----
+ .../common/arch/ppc_64/rte_cpuflags.c         | 15 +---
+ lib/librte_eal/common/eal_common_cpuflags.c   | 79 +++++++++++++++++++
+ .../common/include/generic/rte_cpuflags.h     | 21 +++++
+ 4 files changed, 106 insertions(+), 29 deletions(-)
+
+diff --git a/dpdk-17.11/lib/librte_eal/common/arch/arm/rte_cpuflags.c b/dpdk-17.11/lib/librte_eal/common/arch/arm/rte_cpuflags.c
+index 390a19a26..caf3dc83a 100644
+--- a/dpdk-17.11/lib/librte_eal/common/arch/arm/rte_cpuflags.c
++++ b/dpdk-17.11/lib/librte_eal/common/arch/arm/rte_cpuflags.c
+@@ -105,22 +105,10 @@ const struct feature_entry rte_cpu_feature_table[] = {
+ static void
+ rte_cpu_get_features(hwcap_registers_t out)
+ {
+-	int auxv_fd;
+-	_Elfx_auxv_t auxv;
+-
+-	auxv_fd = open("/proc/self/auxv", O_RDONLY);
+-	assert(auxv_fd != -1);
+-	while (read(auxv_fd, &auxv, sizeof(auxv)) == sizeof(auxv)) {
+-		if (auxv.a_type == AT_HWCAP) {
+-			out[REG_HWCAP] = auxv.a_un.a_val;
+-		} else if (auxv.a_type == AT_HWCAP2) {
+-			out[REG_HWCAP2] = auxv.a_un.a_val;
+-		} else if (auxv.a_type == AT_PLATFORM) {
+-			if (!strcmp((const char *)auxv.a_un.a_val, PLATFORM_STR))
+-				out[REG_PLATFORM] = 0x0001;
+-		}
+-	}
+-	close(auxv_fd);
++	out[REG_HWCAP] = rte_cpu_getauxval(AT_HWCAP);
++	out[REG_HWCAP2] = rte_cpu_getauxval(AT_HWCAP2);
++	if (!rte_cpu_strcmp_auxval(AT_PLATFORM, PLATFORM_STR))
++		out[REG_PLATFORM] = 0x0001;
+ }
+ 
+ /*
+diff --git a/dpdk-17.11/lib/librte_eal/common/arch/ppc_64/rte_cpuflags.c b/dpdk-17.11/lib/librte_eal/common/arch/ppc_64/rte_cpuflags.c
+index 970a61c5e..e7a82452b 100644
+--- a/dpdk-17.11/lib/librte_eal/common/arch/ppc_64/rte_cpuflags.c
++++ b/dpdk-17.11/lib/librte_eal/common/arch/ppc_64/rte_cpuflags.c
+@@ -104,19 +104,8 @@ const struct feature_entry rte_cpu_feature_table[] = {
+ static void
+ rte_cpu_get_features(hwcap_registers_t out)
+ {
+-	int auxv_fd;
+-	Elf64_auxv_t auxv;
+-
+-	auxv_fd = open("/proc/self/auxv", O_RDONLY);
+-	assert(auxv_fd != -1);
+-	while (read(auxv_fd, &auxv,
+-		sizeof(Elf64_auxv_t)) == sizeof(Elf64_auxv_t)) {
+-		if (auxv.a_type == AT_HWCAP)
+-			out[REG_HWCAP] = auxv.a_un.a_val;
+-		else if (auxv.a_type == AT_HWCAP2)
+-			out[REG_HWCAP2] = auxv.a_un.a_val;
+-	}
+-	close(auxv_fd);
++	out[REG_HWCAP] = rte_cpu_getauxval(AT_HWCAP);
++	out[REG_HWCAP2] = rte_cpu_getauxval(AT_HWCAP2);
+ }
+ 
+ /*
+diff --git a/dpdk-17.11/lib/librte_eal/common/eal_common_cpuflags.c b/dpdk-17.11/lib/librte_eal/common/eal_common_cpuflags.c
+index 3a055f7c7..a09667563 100644
+--- a/dpdk-17.11/lib/librte_eal/common/eal_common_cpuflags.c
++++ b/dpdk-17.11/lib/librte_eal/common/eal_common_cpuflags.c
+@@ -2,11 +2,90 @@
+  *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  */
+ 
++#include <elf.h>
++#include <fcntl.h>
+ #include <stdio.h>
++#include <string.h>
++#include <sys/stat.h>
++#include <sys/types.h>
++#include <unistd.h>
++
++#if defined(__GLIBC__) && defined(__GLIBC_PREREQ)
++#if __GLIBC_PREREQ(2, 16)
++#include <sys/auxv.h>
++#define HAS_AUXV 1
++#endif
++#endif
+ 
+ #include <rte_common.h>
+ #include <rte_cpuflags.h>
+ 
++#ifndef HAS_AUXV
++static unsigned long
++getauxval(unsigned long type)
++{
++	errno = ENOTSUP;
++	return 0;
++}
++#endif
++
++#ifdef RTE_ARCH_64
++typedef Elf64_auxv_t Internal_Elfx_auxv_t;
++#else
++typedef Elf32_auxv_t Internal_Elfx_auxv_t;
++#endif
++
++
++/**
++ * Provides a method for retrieving values from the auxiliary vector and
++ * possibly running a string comparison.
++ *
++ * @return Always returns a result.  When the result is 0, check errno
++ * to see if an error occurred during processing.
++ */
++static unsigned long
++_rte_cpu_getauxval(unsigned long type, const char *str)
++{
++	unsigned long val;
++
++	errno = 0;
++	val = getauxval(type);
++
++	if (!val && (errno == ENOTSUP || errno == ENOENT)) {
++		int auxv_fd = open("/proc/self/auxv", O_RDONLY);
++		Internal_Elfx_auxv_t auxv;
++
++		if (auxv_fd == -1)
++			return 0;
++
++		errno = ENOENT;
++		while (read(auxv_fd, &auxv, sizeof(auxv)) == sizeof(auxv)) {
++			if (auxv.a_type == type) {
++				errno = 0;
++				val = auxv.a_un.a_val;
++				if (str)
++					val = strcmp((const char *)val, str);
++				break;
++			}
++		}
++		close(auxv_fd);
++	}
++
++	return val;
++}
++
++unsigned long
++rte_cpu_getauxval(unsigned long type)
++{
++	return _rte_cpu_getauxval(type, NULL);
++}
++
++int
++rte_cpu_strcmp_auxval(unsigned long type, const char *str)
++{
++	return _rte_cpu_getauxval(type, str);
++}
++
+ /**
+  * Checks if the machine is adequate for running the binary. If it is not, the
+  * program exits with status 1.
+diff --git a/dpdk-17.11/lib/librte_eal/common/include/generic/rte_cpuflags.h b/dpdk-17.11/lib/librte_eal/common/include/generic/rte_cpuflags.h
+index 8d31687d8..156ea0029 100644
+--- a/dpdk-17.11/lib/librte_eal/common/include/generic/rte_cpuflags.h
++++ b/dpdk-17.11/lib/librte_eal/common/include/generic/rte_cpuflags.h
+@@ -64,4 +64,25 @@ rte_cpu_check_supported(void);
+ int
+ rte_cpu_is_supported(void);
+ 
++/**
++ * This function attempts to retrieve a value from the auxiliary vector.
++ * If it is unsuccessful, the result will be 0, and errno will be set.
++ *
++ * @return A value from the auxiliary vector.  When the value is 0, check
++ * errno to determine if an error occurred.
++ */
++unsigned long
++rte_cpu_getauxval(unsigned long type);
++
++/**
++ * This function retrieves a value from the auxiliary vector, and compares it
++ * as a string against the value retrieved.
++ *
++ * @return The result of calling strcmp() against the value retrieved from
++ * the auxiliary vector.  When the value is 0 (meaning a match is found),
++ * check errno to determine if an error occurred.
++ */
++int
++rte_cpu_strcmp_auxval(unsigned long type, const char *str);
++
+ #endif /* _RTE_CPUFLAGS_H_ */
+-- 
+2.17.0
+

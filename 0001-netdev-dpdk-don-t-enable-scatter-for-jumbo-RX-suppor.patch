@@ -1,0 +1,55 @@
+From 65a87968f4cfd9cf7a433a3156d98118078f9e4e Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Pablo=20Casc=C3=B3n?= <pablo.cascon@netronome.com>
+Date: Fri, 27 Apr 2018 17:40:49 +0100
+Subject: [PATCH] netdev-dpdk: don't enable scatter for jumbo RX support for
+ nfp
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Currently to RX jumbo packets fails for NICs not supporting scatter.
+Scatter is not strictly needed for jumbo RX support. This change fixes
+the issue by not enabling scatter only for the PMD/NIC known not to
+need it to support jumbo RX.
+
+Note: this change is temporary and not needed for later releases OVS/DPDK
+
+Reported-by: Louis Peens <louis.peens@netronome.com>
+Signed-off-by: Pablo Cascón <pablo.cascon@netronome.com>
+Reviewed-by: Simon Horman <simon.horman@netronome.com>
+Acked-by: Kevin Traynor <ktraynor@redhat.com>
+Signed-off-by: Ian Stokes <ian.stokes@intel.com>
+---
+ lib/netdev-dpdk.c | 14 +++++++++++---
+ 1 file changed, 11 insertions(+), 3 deletions(-)
+
+diff --git a/lib/netdev-dpdk.c b/lib/netdev-dpdk.c
+index 3306b1962..b16bf20d6 100644
+--- a/lib/netdev-dpdk.c
++++ b/lib/netdev-dpdk.c
+@@ -770,11 +770,19 @@ dpdk_eth_dev_queue_setup(struct netdev_dpdk *dev, int n_rxq, int n_txq)
+     int diag = 0;
+     int i;
+     struct rte_eth_conf conf = port_conf;
++    struct rte_eth_dev_info info;
+ 
+-    /* For some NICs (e.g. Niantic), scatter_rx mode needs to be explicitly
+-     * enabled. */
++    /* As of DPDK 17.11.1 a few PMDs require to explicitly enable
++     * scatter to support jumbo RX. Checking the offload capabilities
++     * is not an option as PMDs are not required yet to report
++     * them. The only reliable info is the driver name and knowledge
++     * (testing or code review). Listing all such PMDs feels harder
++     * than highlighting the one known not to need scatter */
+     if (dev->mtu > ETHER_MTU) {
+-        conf.rxmode.enable_scatter = 1;
++        rte_eth_dev_info_get(dev->port_id, &info);
++        if (strncmp(info.driver_name, "net_nfp", 6)) {
++            conf.rxmode.enable_scatter = 1;
++        }
+     }
+ 
+     conf.rxmode.hw_ip_checksum = (dev->hw_ol_features &
+-- 
+2.17.0
+

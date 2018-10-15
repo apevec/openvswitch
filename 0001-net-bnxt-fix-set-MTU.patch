@@ -1,0 +1,50 @@
+From 42e4af421e80ee4a07730a83fd9a7a6b9a1fbe26 Mon Sep 17 00:00:00 2001
+Message-Id: <42e4af421e80ee4a07730a83fd9a7a6b9a1fbe26.1530694215.git.dcaratti@redhat.com>
+From: Ajit Khaparde <ajit.khaparde@broadcom.com>
+Date: Thu, 28 Jun 2018 13:15:43 -0700
+Subject: [PATCH] net/bnxt: fix set MTU
+
+There is no need to update bnxt_hwrm_vnic_plcmode_cfg if new MTU is
+not greater than the max data the mbuf can accommodate.
+
+Fixes: daef48efe5e5 ("net/bnxt: support set MTU")
+Cc: stable@dpdk.org
+
+Signed-off-by: Ajit Khaparde <ajit.khaparde@broadcom.com>
+---
+ drivers/net/bnxt/bnxt_ethdev.c | 12 +++++++++---
+ 1 file changed, 9 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/net/bnxt/bnxt_ethdev.c b/drivers/net/bnxt/bnxt_ethdev.c
+index 7fa69b4e9..896e2d249 100644
+--- a/dpdk-17.11/drivers/net/bnxt/bnxt_ethdev.c
++++ b/dpdk-17.11/drivers/net/bnxt/bnxt_ethdev.c
+@@ -1582,6 +1582,7 @@ static int bnxt_mtu_set_op(struct rte_eth_dev *eth_dev, uint16_t new_mtu)
+ 
+ 	for (i = 0; i < bp->nr_vnics; i++) {
+ 		struct bnxt_vnic_info *vnic = &bp->vnic_info[i];
++		uint16_t size = 0;
+ 
+ 		vnic->mru = bp->eth_dev->data->mtu + ETHER_HDR_LEN +
+ 					ETHER_CRC_LEN + VLAN_TAG_SIZE * 2;
+@@ -1589,9 +1590,14 @@ static int bnxt_mtu_set_op(struct rte_eth_dev *eth_dev, uint16_t new_mtu)
+ 		if (rc)
+ 			break;
+ 
+-		rc = bnxt_hwrm_vnic_plcmode_cfg(bp, vnic);
+-		if (rc)
+-			return rc;
++		size = rte_pktmbuf_data_room_size(bp->rx_queues[0]->mb_pool);
++		size -= RTE_PKTMBUF_HEADROOM;
++
++		if (size < new_mtu) {
++			rc = bnxt_hwrm_vnic_plcmode_cfg(bp, vnic);
++			if (rc)
++				return rc;
++		}
+ 	}
+ 
+ 	return rc;
+-- 
+2.17.1
+

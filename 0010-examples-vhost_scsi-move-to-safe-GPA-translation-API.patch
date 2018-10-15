@@ -1,0 +1,139 @@
+From d34212ffb5e333a515f87b2f828606bc5690b8b3 Mon Sep 17 00:00:00 2001
+From: Maxime Coquelin <maxime.coquelin@redhat.com>
+Date: Mon, 23 Apr 2018 11:33:47 +0200
+Subject: [PATCH 10/11] examples/vhost_scsi: move to safe GPA translation API
+
+This patch uses the new rte_vhost_va_from_guest_pa() API
+to ensure all the descriptor buffer is mapped contiguously
+in the application virtual address space.
+
+As the application did not checked return of previous API,
+this patch just print an error if the buffer address isn't in
+the vhost memory regions or if it is scattered. Ideally, it
+should handle scattered buffers gracefully.
+
+This issue has been assigned CVE-2018-1059.
+
+Signed-off-by: Maxime Coquelin <maxime.coquelin@redhat.com>
+---
+ examples/vhost_scsi/vhost_scsi.c | 56 +++++++++++++++++++++++++++++++++-------
+ 1 file changed, 47 insertions(+), 9 deletions(-)
+
+diff --git a/dpdk-17.11/examples/vhost_scsi/vhost_scsi.c b/dpdk-17.11/examples/vhost_scsi/vhost_scsi.c
+index b4f1f8d..b40f993 100644
+--- a/dpdk-17.11/examples/vhost_scsi/vhost_scsi.c
++++ b/dpdk-17.11/examples/vhost_scsi/vhost_scsi.c
+@@ -69,5 +69,5 @@
+ }
+ 
+-static uint64_t gpa_to_vva(int vid, uint64_t gpa)
++static uint64_t gpa_to_vva(int vid, uint64_t gpa, uint64_t *len)
+ {
+ 	char path[PATH_MAX];
+@@ -89,5 +89,5 @@ static uint64_t gpa_to_vva(int vid, uint64_t gpa)
+ 	assert(ctrlr->mem != NULL);
+ 
+-	return rte_vhost_gpa_to_vva(ctrlr->mem, gpa);
++	return rte_vhost_va_from_guest_pa(ctrlr->mem, gpa, len);
+ }
+ 
+@@ -139,13 +139,27 @@ static uint64_t gpa_to_vva(int vid, uint64_t gpa)
+ {
+ 	void *data;
++	uint64_t chunck_len;
+ 
+ 	task->iovs_cnt = 0;
++	chunck_len = task->desc->len;
+ 	task->resp = (void *)(uintptr_t)gpa_to_vva(task->bdev->vid,
+-						   task->desc->addr);
++						   task->desc->addr,
++						   &chunck_len);
++	if (!task->resp || chunck_len != task->desc->len) {
++		fprintf(stderr, "failed to translate desc address.\n");
++		return;
++	}
+ 
+ 	while (descriptor_has_next(task->desc)) {
+ 		task->desc = descriptor_get_next(task->vq->desc, task->desc);
++		chunck_len = task->desc->len;
+ 		data = (void *)(uintptr_t)gpa_to_vva(task->bdev->vid,
+-						     task->desc->addr);
++						     task->desc->addr,
++							 &chunck_len);
++		if (!data || chunck_len != task->desc->len) {
++			fprintf(stderr, "failed to translate desc address.\n");
++			return;
++		}
++
+ 		task->iovs[task->iovs_cnt].iov_base = data;
+ 		task->iovs[task->iovs_cnt].iov_len = task->desc->len;
+@@ -159,10 +173,18 @@ static uint64_t gpa_to_vva(int vid, uint64_t gpa)
+ {
+ 	void *data;
++	uint64_t chunck_len;
+ 
+ 	task->iovs_cnt = 0;
+ 
+ 	do {
++		chunck_len = task->desc->len;
+ 		data = (void *)(uintptr_t)gpa_to_vva(task->bdev->vid,
+-						     task->desc->addr);
++						     task->desc->addr,
++							 &chunck_len);
++		if (!data || chunck_len != task->desc->len) {
++			fprintf(stderr, "failed to translate desc address.\n");
++			return;
++		}
++
+ 		task->iovs[task->iovs_cnt].iov_base = data;
+ 		task->iovs[task->iovs_cnt].iov_len = task->desc->len;
+@@ -172,6 +194,10 @@ static uint64_t gpa_to_vva(int vid, uint64_t gpa)
+ 	} while (descriptor_has_next(task->desc));
+ 
++	chunck_len = task->desc->len;
+ 	task->resp = (void *)(uintptr_t)gpa_to_vva(task->bdev->vid,
+-						   task->desc->addr);
++						   task->desc->addr,
++						   &chunck_len);
++	if (!task->resp || chunck_len != task->desc->len)
++		fprintf(stderr, "failed to translate desc address.\n");
+ }
+ 
+@@ -219,4 +245,5 @@ static uint64_t gpa_to_vva(int vid, uint64_t gpa)
+ 		uint16_t last_idx;
+ 		struct vhost_scsi_task *task;
++		uint64_t chunck_len;
+ 
+ 		last_idx = scsi_vq->last_used_idx & (vq->size - 1);
+@@ -236,14 +263,25 @@ static uint64_t gpa_to_vva(int vid, uint64_t gpa)
+ 		scsi_vq->last_used_idx++;
+ 
++		chunck_len = task->desc->len;
+ 		task->req = (void *)(uintptr_t)gpa_to_vva(task->bdev->vid,
+-							  task->desc->addr);
++							  task->desc->addr,
++							  &chunck_len);
++		if (!task->req || chunck_len != task->desc->len) {
++			fprintf(stderr, "failed to translate desc address.\n");
++			return;
++		}
+ 
+ 		task->desc = descriptor_get_next(task->vq->desc, task->desc);
+ 		if (!descriptor_has_next(task->desc)) {
+ 			task->dxfer_dir = SCSI_DIR_NONE;
++			chunck_len = task->desc->len;
+ 			task->resp = (void *)(uintptr_t)
+ 					      gpa_to_vva(task->bdev->vid,
+-							 task->desc->addr);
+-
++							 task->desc->addr,
++							 &chunck_len);
++			if (!task->resp || chunck_len != task->desc->len) {
++				fprintf(stderr, "failed to translate desc address.\n");
++				return;
++			}
+ 		} else if (!descriptor_is_wr(task->desc)) {
+ 			task->dxfer_dir = SCSI_DIR_TO_DEV;
+-- 
+1.8.3.1
+

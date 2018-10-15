@@ -1,0 +1,213 @@
+From ee0d896b3c3ba2dbf5a7a2598a2d8dbe242a0aa7 Mon Sep 17 00:00:00 2001
+From: Maxime Coquelin <maxime.coquelin@redhat.com>
+Date: Mon, 23 Apr 2018 11:33:43 +0200
+Subject: [PATCH 06/11] vhost: handle virtually non-contiguous buffers in Tx
+
+This patch enables the handling of buffers non-contiguous in
+process virtual address space in the dequeue path.
+
+When virtio-net header doesn't fit in a single chunck, it is
+copied into a local variablei before being processed.
+
+For packet content, the copy length is limited to the chunck
+size, next chuncks VAs being fetched afterward.
+
+This issue has been assigned CVE-2018-1059.
+
+Signed-off-by: Maxime Coquelin <maxime.coquelin@redhat.com>
+---
+ lib/librte_vhost/virtio_net.c | 117 ++++++++++++++++++++++++++++++++++--------
+ 1 file changed, 95 insertions(+), 22 deletions(-)
+
+diff --git a/dpdk-17.11/lib/librte_vhost/virtio_net.c b/dpdk-17.11/lib/librte_vhost/virtio_net.c
+index 13252e6..47717a1 100644
+--- a/dpdk-17.11/lib/librte_vhost/virtio_net.c
++++ b/dpdk-17.11/lib/librte_vhost/virtio_net.c
+@@ -996,10 +996,11 @@
+ {
+ 	struct vring_desc *desc;
+-	uint64_t desc_addr;
++	uint64_t desc_addr, desc_gaddr;
+ 	uint32_t desc_avail, desc_offset;
+ 	uint32_t mbuf_avail, mbuf_offset;
+ 	uint32_t cpy_len;
+-	uint64_t dlen;
++	uint64_t desc_chunck_len;
+ 	struct rte_mbuf *cur = m, *prev = m;
++	struct virtio_net_hdr tmp_hdr;
+ 	struct virtio_net_hdr *hdr = NULL;
+ 	/* A counter to avoid desc dead loop chain */
+@@ -1016,10 +1017,11 @@
+ 	}
+ 
+-	dlen = desc->len;
++	desc_chunck_len = desc->len;
++	desc_gaddr = desc->addr;
+ 	desc_addr = vhost_iova_to_vva(dev,
+-					vq, desc->addr,
+-					&dlen,
++					vq, desc_gaddr,
++					&desc_chunck_len,
+ 					VHOST_ACCESS_RO);
+-	if (unlikely(!desc_addr || dlen != desc->len)) {
++	if (unlikely(!desc_addr)) {
+ 		error = -1;
+ 		goto out;
+@@ -1027,6 +1029,38 @@
+ 
+ 	if (virtio_net_with_host_offload(dev)) {
+-		hdr = (struct virtio_net_hdr *)((uintptr_t)desc_addr);
+-		rte_prefetch0(hdr);
++		if (unlikely(desc_chunck_len < sizeof(struct virtio_net_hdr))) {
++			uint64_t len = desc_chunck_len;
++			uint64_t remain = sizeof(struct virtio_net_hdr);
++			uint64_t src = desc_addr;
++			uint64_t dst = (uint64_t)(uintptr_t)&tmp_hdr;
++			uint64_t guest_addr = desc_gaddr;
++
++			/*
++			 * No luck, the virtio-net header doesn't fit
++			 * in a contiguous virtual area.
++			 */
++			while (remain) {
++				len = remain;
++				src = vhost_iova_to_vva(dev, vq,
++						guest_addr, &len,
++						VHOST_ACCESS_RO);
++				if (unlikely(!src || !len)) {
++					error = -1;
++					goto out;
++				}
++
++				rte_memcpy((void *)(uintptr_t)dst,
++						   (void *)(uintptr_t)src, len);
++
++				guest_addr += len;
++				remain -= len;
++				dst += len;
++			}
++
++			hdr = &tmp_hdr;
++		} else {
++			hdr = (struct virtio_net_hdr *)((uintptr_t)desc_addr);
++			rte_prefetch0(hdr);
++		}
+ 	}
+ 
+@@ -1044,10 +1078,11 @@
+ 		}
+ 
+-		dlen = desc->len;
++		desc_chunck_len = desc->len;
++		desc_gaddr = desc->addr;
+ 		desc_addr = vhost_iova_to_vva(dev,
+-							vq, desc->addr,
+-							&dlen,
++							vq, desc_gaddr,
++							&desc_chunck_len,
+ 							VHOST_ACCESS_RO);
+-		if (unlikely(!desc_addr || dlen != desc->len)) {
++		if (unlikely(!desc_addr)) {
+ 			error = -1;
+ 			goto out;
+@@ -1059,10 +1094,28 @@
+ 	} else {
+ 		desc_avail  = desc->len - dev->vhost_hlen;
+-		desc_offset = dev->vhost_hlen;
++
++		if (unlikely(desc_chunck_len < dev->vhost_hlen)) {
++			desc_chunck_len = desc_avail;
++			desc_gaddr += dev->vhost_hlen;
++			desc_addr = vhost_iova_to_vva(dev,
++					vq, desc_gaddr,
++					&desc_chunck_len,
++					VHOST_ACCESS_RO);
++			if (unlikely(!desc_addr)) {
++				error = -1;
++				goto out;
++			}
++
++			desc_offset = 0;
++		} else {
++			desc_offset = dev->vhost_hlen;
++			desc_chunck_len -= dev->vhost_hlen;
++		}
+ 	}
+ 
+ 	rte_prefetch0((void *)(uintptr_t)(desc_addr + desc_offset));
+ 
+-	PRINT_PACKET(dev, (uintptr_t)(desc_addr + desc_offset), desc_avail, 0);
++	PRINT_PACKET(dev, (uintptr_t)(desc_addr + desc_offset),
++			desc_chunck_len, 0);
+ 
+ 	mbuf_offset = 0;
+@@ -1071,5 +1124,5 @@
+ 		uint64_t hpa;
+ 
+-		cpy_len = RTE_MIN(desc_avail, mbuf_avail);
++		cpy_len = RTE_MIN(desc_chunck_len, mbuf_avail);
+ 
+ 		/*
+@@ -1079,5 +1132,5 @@
+ 		 */
+ 		if (unlikely(dev->dequeue_zero_copy && (hpa = gpa_to_hpa(dev,
+-					desc->addr + desc_offset, cpy_len)))) {
++					desc_gaddr + desc_offset, cpy_len)))) {
+ 			cur->data_len = cpy_len;
+ 			cur->data_off = 0;
+@@ -1094,5 +1147,6 @@
+ 			if (likely(cpy_len > MAX_BATCH_LEN ||
+ 				   copy_nb >= vq->size ||
+-				   (hdr && cur == m))) {
++				   (hdr && cur == m) ||
++				   desc->len != desc_chunck_len)) {
+ 				rte_memcpy(rte_pktmbuf_mtod_offset(cur, void *,
+ 								   mbuf_offset),
+@@ -1115,4 +1169,5 @@
+ 		mbuf_offset += cpy_len;
+ 		desc_avail  -= cpy_len;
++		desc_chunck_len -= cpy_len;
+ 		desc_offset += cpy_len;
+ 
+@@ -1133,9 +1188,11 @@
+ 			}
+ 
+-			dlen = desc->len;
++			desc_chunck_len = desc->len;
++			desc_gaddr = desc->addr;
+ 			desc_addr = vhost_iova_to_vva(dev,
+-							vq, desc->addr,
+-							&dlen, VHOST_ACCESS_RO);
+-			if (unlikely(!desc_addr || dlen != desc->len)) {
++							vq, desc_gaddr,
++							&desc_chunck_len,
++							VHOST_ACCESS_RO);
++			if (unlikely(!desc_addr)) {
+ 				error = -1;
+ 				goto out;
+@@ -1147,5 +1204,21 @@
+ 			desc_avail  = desc->len;
+ 
+-			PRINT_PACKET(dev, (uintptr_t)desc_addr, desc->len, 0);
++			PRINT_PACKET(dev, (uintptr_t)desc_addr,
++					desc_chunck_len, 0);
++		} else if (unlikely(desc_chunck_len == 0)) {
++			desc_chunck_len = desc_avail;
++			desc_gaddr += desc_offset;
++			desc_addr = vhost_iova_to_vva(dev, vq,
++					desc_gaddr,
++					&desc_chunck_len,
++					VHOST_ACCESS_RO);
++			if (unlikely(!desc_addr)) {
++				error = -1;
++				goto out;
++			}
++			desc_offset = 0;
++
++			PRINT_PACKET(dev, (uintptr_t)desc_addr,
++					desc_chunck_len, 0);
+ 		}
+ 
+-- 
+1.8.3.1
+

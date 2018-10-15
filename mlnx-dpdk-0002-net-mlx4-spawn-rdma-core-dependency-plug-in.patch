@@ -1,0 +1,245 @@
+From 1e6ab669d81e73ae7f4dead275d03e7f77ad76f7 Mon Sep 17 00:00:00 2001
+From: Adrien Mazarguil <adrien.mazarguil@6wind.com>
+Date: Tue, 30 Jan 2018 16:34:54 +0100
+Subject: [PATCH 2/9] net/mlx4: spawn rdma-core dependency plug-in
+
+When mlx4 is not compiled directly as an independent shared object (e.g.
+CONFIG_RTE_BUILD_SHARED_LIB not enabled for performance reasons), DPDK
+applications inherit its dependencies on libibverbs and libmlx4 through
+rte.app.mk.
+
+This is an issue both when DPDK is delivered as a binary package (Linux
+distributions) and for end users because rdma-core then propagates as a
+mandatory dependency for everything.
+
+Application writers relying on binary DPDK packages are not necessarily
+aware of this fact and may end up delivering packages with broken
+dependencies.
+
+This patch therefore introduces an intermediate internal plug-in
+hard-linked with rdma-core (to preserve symbol versioning) loaded by the
+PMD through dlopen(), so that a missing rdma-core does not cause unresolved
+symbols, allowing applications to start normally.
+
+Signed-off-by: Adrien Mazarguil <adrien.mazarguil@6wind.com>
+(cherry picked from commit 9e3391b98b6374e2796e0ae38dcce314efdc4f37)
+---
+ config/common_base        |  1 +
+ doc/guides/nics/mlx4.rst  | 13 +++++++++++++
+ drivers/net/mlx4/Makefile | 29 ++++++++++++++++++++++++++++
+ drivers/net/mlx4/mlx4.c   | 49 +++++++++++++++++++++++++++++++++++++++++++++++
+ mk/rte.app.mk             |  4 ++++
+ 5 files changed, 96 insertions(+)
+
+diff --git a/dpdk-17.11/config/common_base b/dpdk-17.11/config/common_base
+index e74febe..71a764c 100644
+--- a/dpdk-17.11/config/common_base
++++ b/dpdk-17.11/config/common_base
+@@ -231,6 +231,7 @@ CONFIG_RTE_LIBRTE_FM10K_INC_VECTOR=y
+ CONFIG_RTE_LIBRTE_MLX4_PMD=n
+ CONFIG_RTE_LIBRTE_MLX4_DEBUG=n
+ CONFIG_RTE_LIBRTE_MLX4_DEBUG_BROKEN_VERBS=n
++CONFIG_RTE_LIBRTE_MLX4_DLOPEN_DEPS=n
+ CONFIG_RTE_LIBRTE_MLX4_TX_MP_CACHE=8
+ 
+ #
+diff --git a/dpdk-17.11/doc/guides/nics/mlx4.rst b/dpdk-17.11/doc/guides/nics/mlx4.rst
+index 22341b9..5912722 100644
+--- a/dpdk-17.11/doc/guides/nics/mlx4.rst
++++ b/dpdk-17.11/doc/guides/nics/mlx4.rst
+@@ -86,6 +86,19 @@ These options can be modified in the ``.config`` file.
+ 
+   Toggle compilation of librte_pmd_mlx4 itself.
+ 
++- ``CONFIG_RTE_LIBRTE_MLX4_DLOPEN_DEPS`` (default **n**)
++
++  Build PMD with additional code to make it loadable without hard
++  dependencies on **libibverbs** nor **libmlx4**, which may not be installed
++  on the target system.
++
++  In this mode, their presence is still required for it to run properly,
++  however their absence won't prevent a DPDK application from starting (with
++  ``CONFIG_RTE_BUILD_SHARED_LIB`` disabled) and they won't show up as
++  missing with ``ldd(1)``.
++
++  This option has no performance impact.
++
+ - ``CONFIG_RTE_LIBRTE_MLX4_DEBUG`` (default **n**)
+ 
+   Toggle debugging code and stricter compilation flags. Enabling this option
+diff --git a/dpdk-17.11/drivers/net/mlx4/Makefile b/dpdk-17.11/drivers/net/mlx4/Makefile
+index 7ba304b..60ee120 100644
+--- a/dpdk-17.11/drivers/net/mlx4/Makefile
++++ b/dpdk-17.11/drivers/net/mlx4/Makefile
+@@ -33,12 +33,15 @@ include $(RTE_SDK)/mk/rte.vars.mk
+ 
+ # Library name.
+ LIB = librte_pmd_mlx4.a
++LIB_GLUE = librte_pmd_mlx4_glue.so
+ 
+ # Sources.
+ SRCS-$(CONFIG_RTE_LIBRTE_MLX4_PMD) += mlx4.c
+ SRCS-$(CONFIG_RTE_LIBRTE_MLX4_PMD) += mlx4_ethdev.c
+ SRCS-$(CONFIG_RTE_LIBRTE_MLX4_PMD) += mlx4_flow.c
++ifneq ($(CONFIG_RTE_LIBRTE_MLX4_DLOPEN_DEPS),y)
+ SRCS-$(CONFIG_RTE_LIBRTE_MLX4_PMD) += mlx4_glue.c
++endif
+ SRCS-$(CONFIG_RTE_LIBRTE_MLX4_PMD) += mlx4_intr.c
+ SRCS-$(CONFIG_RTE_LIBRTE_MLX4_PMD) += mlx4_mr.c
+ SRCS-$(CONFIG_RTE_LIBRTE_MLX4_PMD) += mlx4_rxq.c
+@@ -46,6 +49,10 @@ SRCS-$(CONFIG_RTE_LIBRTE_MLX4_PMD) += mlx4_rxtx.c
+ SRCS-$(CONFIG_RTE_LIBRTE_MLX4_PMD) += mlx4_txq.c
+ SRCS-$(CONFIG_RTE_LIBRTE_MLX4_PMD) += mlx4_utils.c
+ 
++ifeq ($(CONFIG_RTE_LIBRTE_MLX4_DLOPEN_DEPS),y)
++INSTALL-$(CONFIG_RTE_LIBRTE_MLX4_PMD)-lib += $(LIB_GLUE)
++endif
++
+ # Basic CFLAGS.
+ CFLAGS += -O3
+ CFLAGS += -std=c11 -Wall -Wextra
+@@ -55,7 +62,13 @@ CFLAGS += -D_BSD_SOURCE
+ CFLAGS += -D_DEFAULT_SOURCE
+ CFLAGS += -D_XOPEN_SOURCE=600
+ CFLAGS += $(WERROR_FLAGS)
++ifeq ($(CONFIG_RTE_LIBRTE_MLX4_DLOPEN_DEPS),y)
++CFLAGS += -DMLX4_GLUE='"$(LIB_GLUE)"'
++CFLAGS_mlx4_glue.o += -fPIC
++LDLIBS += -ldl
++else
+ LDLIBS += -libverbs -lmlx4
++endif
+ LDLIBS += -lrte_eal -lrte_mbuf -lrte_mempool -lrte_ring
+ LDLIBS += -lrte_ethdev -lrte_net -lrte_kvargs
+ LDLIBS += -lrte_bus_pci
+@@ -113,7 +126,23 @@ mlx4_autoconf.h: mlx4_autoconf.h.new
+ 
+ $(SRCS-$(CONFIG_RTE_LIBRTE_MLX4_PMD):.c=.o): mlx4_autoconf.h
+ 
++# Generate dependency plug-in for rdma-core when the PMD must not be linked
++# directly, so that applications do not inherit this dependency.
++
++ifeq ($(CONFIG_RTE_LIBRTE_MLX4_DLOPEN_DEPS),y)
++
++$(LIB): $(LIB_GLUE)
++
++$(LIB_GLUE): mlx4_glue.o
++	$Q $(LD) $(LDFLAGS) $(EXTRA_LDFLAGS) \
++		-s -shared -o $@ $< -libverbs -lmlx4
++
++mlx4_glue.o: mlx4_autoconf.h
++
++endif
++
+ clean_mlx4: FORCE
+ 	$Q rm -f -- mlx4_autoconf.h mlx4_autoconf.h.new
++	$Q rm -f -- mlx4_glue.o $(LIB_GLUE)
+ 
+ clean: clean_mlx4
+diff --git a/dpdk-17.11/drivers/net/mlx4/mlx4.c b/dpdk-17.11/drivers/net/mlx4/mlx4.c
+index 7f58e26..d12b00c 100644
+--- a/dpdk-17.11/drivers/net/mlx4/mlx4.c
++++ b/dpdk-17.11/drivers/net/mlx4/mlx4.c
+@@ -37,6 +37,7 @@
+  */
+ 
+ #include <assert.h>
++#include <dlfcn.h>
+ #include <errno.h>
+ #include <inttypes.h>
+ #include <stddef.h>
+@@ -44,6 +45,7 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <unistd.h>
+ 
+ /* Verbs headers do not support -pedantic. */
+ #ifdef PEDANTIC
+@@ -55,6 +57,7 @@
+ #endif
+ 
+ #include <rte_common.h>
++#include <rte_config.h>
+ #include <rte_dev.h>
+ #include <rte_errno.h>
+ #include <rte_ethdev.h>
+@@ -701,6 +704,47 @@ struct mlx4_conf {
+ 		     RTE_PCI_DRV_INTR_RMV,
+ };
+ 
++#ifdef RTE_LIBRTE_MLX4_DLOPEN_DEPS
++
++/**
++ * Initialization routine for run-time dependency on rdma-core.
++ */
++static int
++mlx4_glue_init(void)
++{
++	void *handle = NULL;
++	void **sym;
++	const char *dlmsg;
++
++	handle = dlopen(MLX4_GLUE, RTLD_LAZY);
++	if (!handle) {
++		rte_errno = EINVAL;
++		dlmsg = dlerror();
++		if (dlmsg)
++			WARN("cannot load glue library: %s", dlmsg);
++		goto glue_error;
++	}
++	sym = dlsym(handle, "mlx4_glue");
++	if (!sym || !*sym) {
++		rte_errno = EINVAL;
++		dlmsg = dlerror();
++		if (dlmsg)
++			ERROR("cannot resolve glue symbol: %s", dlmsg);
++		goto glue_error;
++	}
++	mlx4_glue = *sym;
++	return 0;
++glue_error:
++	if (handle)
++		dlclose(handle);
++	WARN("cannot initialize PMD due to missing run-time"
++	     " dependency on rdma-core libraries (libibverbs,"
++	     " libmlx4)");
++	return -rte_errno;
++}
++
++#endif
++
+ /**
+  * Driver initialization routine.
+  */
+@@ -715,6 +759,11 @@ struct mlx4_conf {
+ 	 * using this PMD, which is not supported in forked processes.
+ 	 */
+ 	setenv("RDMAV_HUGEPAGES_SAFE", "1", 1);
++#ifdef RTE_LIBRTE_MLX4_DLOPEN_DEPS
++	if (mlx4_glue_init())
++		return;
++	assert(mlx4_glue);
++#endif
+ 	mlx4_glue->fork_init();
+ 	rte_pci_register(&mlx4_driver);
+ }
+diff --git a/dpdk-17.11/mk/rte.app.mk b/dpdk-17.11/mk/rte.app.mk
+index 6a6a745..6ececfe 100644
+--- a/dpdk-17.11/mk/rte.app.mk
++++ b/dpdk-17.11/mk/rte.app.mk
+@@ -141,7 +141,11 @@ ifeq ($(CONFIG_RTE_LIBRTE_KNI),y)
+ _LDLIBS-$(CONFIG_RTE_LIBRTE_PMD_KNI)        += -lrte_pmd_kni
+ endif
+ _LDLIBS-$(CONFIG_RTE_LIBRTE_LIO_PMD)        += -lrte_pmd_lio
++ifeq ($(CONFIG_RTE_LIBRTE_MLX4_DLOPEN_DEPS),y)
++_LDLIBS-$(CONFIG_RTE_LIBRTE_MLX4_PMD)       += -lrte_pmd_mlx4 -ldl
++else
+ _LDLIBS-$(CONFIG_RTE_LIBRTE_MLX4_PMD)       += -lrte_pmd_mlx4 -libverbs -lmlx4
++endif
+ _LDLIBS-$(CONFIG_RTE_LIBRTE_MLX5_PMD)       += -lrte_pmd_mlx5 -libverbs -lmlx5
+ _LDLIBS-$(CONFIG_RTE_LIBRTE_MRVL_PMD)       += -lrte_pmd_mrvl -L$(LIBMUSDK_PATH)/lib -lmusdk
+ _LDLIBS-$(CONFIG_RTE_LIBRTE_NFP_PMD)        += -lrte_pmd_nfp
+-- 
+1.8.3.1
+

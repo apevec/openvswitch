@@ -1,0 +1,256 @@
+From 82d2ba939b9bbd99ed25ea06d5a690cf96489ea9 Mon Sep 17 00:00:00 2001
+From: Alejandro Lucero <alejandro.lucero@netronome.com>
+Date: Fri, 24 Nov 2017 15:31:49 +0000
+Subject: [PATCH] net/nfp: configure default RSS reta table
+
+Some apps can enable RSS but not update the reta table nor the hash.
+This patch adds a default reta table setup based on total number of
+configured rx queues. The hash key is dependent on how the app
+configures the rx_conf struct.
+
+Signed-off-by: Alejandro Lucero <alejandro.lucero@netronome.com>
+(cherry picked from commit f92e94478803c2307e68bf1023e6b49106bc843d)
+---
+ drivers/net/nfp/nfp_net.c | 154 +++++++++++++++++++++++++++++++-------
+ 1 file changed, 125 insertions(+), 29 deletions(-)
+
+diff --git a/dpdk-17.11/drivers/net/nfp/nfp_net.c b/dpdk-17.11/drivers/net/nfp/nfp_net.c
+index 3a63b1ca3..559230ab6 100644
+--- a/dpdk-17.11/drivers/net/nfp/nfp_net.c
++++ b/dpdk-17.11/drivers/net/nfp/nfp_net.c
+@@ -101,6 +101,15 @@ static void nfp_net_stop(struct rte_eth_dev *dev);
+ static uint16_t nfp_net_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
+ 				  uint16_t nb_pkts);
+ 
++static int nfp_net_rss_config_default(struct rte_eth_dev *dev);
++static int nfp_net_rss_hash_update(struct rte_eth_dev *dev,
++				   struct rte_eth_rss_conf *rss_conf);
++static int nfp_net_rss_reta_write(struct rte_eth_dev *dev,
++		    struct rte_eth_rss_reta_entry64 *reta_conf,
++		    uint16_t reta_size);
++static int nfp_net_rss_hash_write(struct rte_eth_dev *dev,
++			struct rte_eth_rss_conf *rss_conf);
++
+ /* The offset of the queue controller queues in the PCIe Target */
+ #define NFP_PCIE_QUEUE(_q) (0x80000 + (NFP_QCP_QUEUE_ADDR_SZ * ((_q) & 0xff)))
+ 
+@@ -721,6 +730,8 @@ nfp_net_start(struct rte_eth_dev *dev)
+ {
+ 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
+ 	struct rte_intr_handle *intr_handle = &pci_dev->intr_handle;
++	struct rte_eth_conf *dev_conf;
++	struct rte_eth_rxmode *rxmode;
+ 	uint32_t new_ctrl, update = 0;
+ 	struct nfp_net_hw *hw;
+ 	uint32_t intr_vector;
+@@ -770,6 +781,19 @@ nfp_net_start(struct rte_eth_dev *dev)
+ 
+ 	rte_intr_enable(intr_handle);
+ 
++	dev_conf = &dev->data->dev_conf;
++	rxmode = &dev_conf->rxmode;
++
++	/* Checking RX mode */
++	if (rxmode->mq_mode & ETH_MQ_RX_RSS) {
++		if (hw->cap & NFP_NET_CFG_CTRL_RSS) {
++			if (!nfp_net_rss_config_default(dev))
++				update |= NFP_NET_CFG_UPDATE_RSS;
++		} else {
++			PMD_INIT_LOG(INFO, "RSS not supported");
++			return -EINVAL;
++		}
++	}
+ 	/* Enable device */
+ 	new_ctrl = hw->ctrl | NFP_NET_CFG_CTRL_ENABLE;
+ 
+@@ -2329,22 +2353,17 @@ nfp_net_vlan_offload_set(struct rte_eth_dev *dev, int mask)
+ 	return ret;
+ }
+ 
+-/* Update Redirection Table(RETA) of Receive Side Scaling of Ethernet device */
+ static int
+-nfp_net_reta_update(struct rte_eth_dev *dev,
++nfp_net_rss_reta_write(struct rte_eth_dev *dev,
+ 		    struct rte_eth_rss_reta_entry64 *reta_conf,
+ 		    uint16_t reta_size)
+ {
+ 	uint32_t reta, mask;
+ 	int i, j;
+ 	int idx, shift;
+-	uint32_t update;
+ 	struct nfp_net_hw *hw =
+ 		NFP_NET_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+ 
+-	if (!(hw->ctrl & NFP_NET_CFG_CTRL_RSS))
+-		return -EINVAL;
+-
+ 	if (reta_size != NFP_NET_CFG_RSS_ITBL_SZ) {
+ 		RTE_LOG(ERR, PMD, "The size of hash lookup table configured "
+ 			"(%d) doesn't match the number hardware can supported "
+@@ -2381,6 +2400,26 @@ nfp_net_reta_update(struct rte_eth_dev *dev,
+ 		nn_cfg_writel(hw, NFP_NET_CFG_RSS_ITBL + (idx * 64) + shift,
+ 			      reta);
+ 	}
++	return 0;
++}
++
++/* Update Redirection Table(RETA) of Receive Side Scaling of Ethernet device */
++static int
++nfp_net_reta_update(struct rte_eth_dev *dev,
++		    struct rte_eth_rss_reta_entry64 *reta_conf,
++		    uint16_t reta_size)
++{
++	struct nfp_net_hw *hw =
++		NFP_NET_DEV_PRIVATE_TO_HW(dev->data->dev_private);
++	uint32_t update;
++	int ret;
++
++	if (!(hw->ctrl & NFP_NET_CFG_CTRL_RSS))
++		return -EINVAL;
++
++	ret = nfp_net_rss_reta_write(dev, reta_conf, reta_size);
++	if (ret != 0)
++		return ret;
+ 
+ 	update = NFP_NET_CFG_UPDATE_RSS;
+ 
+@@ -2439,33 +2478,24 @@ nfp_net_reta_query(struct rte_eth_dev *dev,
+ }
+ 
+ static int
+-nfp_net_rss_hash_update(struct rte_eth_dev *dev,
++nfp_net_rss_hash_write(struct rte_eth_dev *dev,
+ 			struct rte_eth_rss_conf *rss_conf)
+ {
+-	uint32_t update;
++	struct nfp_net_hw *hw;
++	uint64_t rss_hf;
+ 	uint32_t cfg_rss_ctrl = 0;
+ 	uint8_t key;
+-	uint64_t rss_hf;
+ 	int i;
+-	struct nfp_net_hw *hw;
+ 
+ 	hw = NFP_NET_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+ 
+-	rss_hf = rss_conf->rss_hf;
+-
+-	/* Checking if RSS is enabled */
+-	if (!(hw->ctrl & NFP_NET_CFG_CTRL_RSS)) {
+-		if (rss_hf != 0) { /* Enable RSS? */
+-			RTE_LOG(ERR, PMD, "RSS unsupported\n");
+-			return -EINVAL;
+-		}
+-		return 0; /* Nothing to do */
++	/* Writing the key byte a byte */
++	for (i = 0; i < rss_conf->rss_key_len; i++) {
++		memcpy(&key, &rss_conf->rss_key[i], 1);
++		nn_cfg_writeb(hw, NFP_NET_CFG_RSS_KEY + i, key);
+ 	}
+ 
+-	if (rss_conf->rss_key_len > NFP_NET_CFG_RSS_KEY_SZ) {
+-		RTE_LOG(ERR, PMD, "hash key too long\n");
+-		return -EINVAL;
+-	}
++	rss_hf = rss_conf->rss_hf;
+ 
+ 	if (rss_hf & ETH_RSS_IPV4)
+ 		cfg_rss_ctrl |= NFP_NET_CFG_RSS_IPV4 |
+@@ -2483,15 +2513,40 @@ nfp_net_rss_hash_update(struct rte_eth_dev *dev,
+ 	/* configuring where to apply the RSS hash */
+ 	nn_cfg_writel(hw, NFP_NET_CFG_RSS_CTRL, cfg_rss_ctrl);
+ 
+-	/* Writing the key byte a byte */
+-	for (i = 0; i < rss_conf->rss_key_len; i++) {
+-		memcpy(&key, &rss_conf->rss_key[i], 1);
+-		nn_cfg_writeb(hw, NFP_NET_CFG_RSS_KEY + i, key);
+-	}
+-
+ 	/* Writing the key size */
+ 	nn_cfg_writeb(hw, NFP_NET_CFG_RSS_KEY_SZ, rss_conf->rss_key_len);
+ 
++	return 0;
++}
++
++static int
++nfp_net_rss_hash_update(struct rte_eth_dev *dev,
++			struct rte_eth_rss_conf *rss_conf)
++{
++	uint32_t update;
++	uint64_t rss_hf;
++	struct nfp_net_hw *hw;
++
++	hw = NFP_NET_DEV_PRIVATE_TO_HW(dev->data->dev_private);
++
++	rss_hf = rss_conf->rss_hf;
++
++	/* Checking if RSS is enabled */
++	if (!(hw->ctrl & NFP_NET_CFG_CTRL_RSS)) {
++		if (rss_hf != 0) { /* Enable RSS? */
++			RTE_LOG(ERR, PMD, "RSS unsupported\n");
++			return -EINVAL;
++		}
++		return 0; /* Nothing to do */
++	}
++
++	if (rss_conf->rss_key_len > NFP_NET_CFG_RSS_KEY_SZ) {
++		RTE_LOG(ERR, PMD, "hash key too long\n");
++		return -EINVAL;
++	}
++
++	nfp_net_rss_hash_write(dev, rss_conf);
++
+ 	update = NFP_NET_CFG_UPDATE_RSS;
+ 
+ 	if (nfp_net_reconfig(hw, hw->ctrl, update) < 0)
+@@ -2548,6 +2603,47 @@ nfp_net_rss_hash_conf_get(struct rte_eth_dev *dev,
+ 	return 0;
+ }
+ 
++static int
++nfp_net_rss_config_default(struct rte_eth_dev *dev)
++{
++	struct rte_eth_conf *dev_conf;
++	struct rte_eth_rss_conf rss_conf;
++	struct rte_eth_rss_reta_entry64 nfp_reta_conf[2];
++	uint16_t rx_queues = dev->data->nb_rx_queues;
++	uint16_t queue;
++	int i, j, ret;
++
++	RTE_LOG(INFO, PMD, "setting default RSS conf for %u queues\n",
++		rx_queues);
++
++	nfp_reta_conf[0].mask = ~0x0;
++	nfp_reta_conf[1].mask = ~0x0;
++
++	queue = 0;
++	for (i = 0; i < 0x40; i += 8) {
++		for (j = i; j < (i + 8); j++) {
++			nfp_reta_conf[0].reta[j] = queue;
++			nfp_reta_conf[1].reta[j] = queue++;
++			queue %= rx_queues;
++		}
++	}
++	ret = nfp_net_rss_reta_write(dev, nfp_reta_conf, 0x80);
++	if (ret != 0)
++		return ret;
++
++	dev_conf = &dev->data->dev_conf;
++	if (!dev_conf) {
++		RTE_LOG(INFO, PMD, "wrong rss conf");
++		return -EINVAL;
++	}
++	rss_conf = dev_conf->rx_adv_conf.rss_conf;
++
++	ret = nfp_net_rss_hash_write(dev, &rss_conf);
++
++	return ret;
++}
++
++
+ /* Initialise and register driver with DPDK Application */
+ static const struct eth_dev_ops nfp_net_eth_dev_ops = {
+ 	.dev_configure		= nfp_net_configure,
+-- 
+2.17.0
+

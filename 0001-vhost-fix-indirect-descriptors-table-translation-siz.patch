@@ -1,0 +1,32 @@
+From c7903f9048e1eae871651f72f066393f88c54f55 Mon Sep 17 00:00:00 2001
+From: Maxime Coquelin <maxime.coquelin@redhat.com>
+Date: Mon, 23 Apr 2018 11:33:38 +0200
+Subject: [PATCH 01/11] vhost: fix indirect descriptors table translation size
+
+This patch fixes the size passed at the indirect descriptor
+table translation time, which is the len field of the descriptor,
+and not a single descriptor.
+
+This issue has been assigned CVE-2018-1059.
+
+Fixes: 62fdb8255ae7 ("vhost: use the guest IOVA to host VA helper")
+
+Signed-off-by: Maxime Coquelin <maxime.coquelin@redhat.com>
+---
+ lib/librte_vhost/virtio_net.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/dpdk-17.11/lib/librte_vhost/virtio_net.c b/dpdk-17.11/lib/librte_vhost/virtio_net.c
+index d347030..cb1d0cf 100644
+--- a/dpdk-17.11/lib/librte_vhost/virtio_net.c
++++ b/dpdk-17.11/lib/librte_vhost/virtio_net.c
+@@ -1329,5 +1329,5 @@
+ 				vhost_iova_to_vva(dev, vq,
+ 						vq->desc[desc_indexes[i]].addr,
+-						sizeof(*desc),
++						vq->desc[desc_indexes[i]].len,
+ 						VHOST_ACCESS_RO);
+ 			if (unlikely(!desc))
+-- 
+1.8.3.1
+

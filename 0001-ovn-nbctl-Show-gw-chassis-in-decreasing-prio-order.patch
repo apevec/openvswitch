@@ -1,0 +1,137 @@
+From d45d99646c37bbfdb504aeb7a0f1f9a5a584506c Mon Sep 17 00:00:00 2001
+Message-Id: <d45d99646c37bbfdb504aeb7a0f1f9a5a584506c.1525946601.git.lorenzo.bianconi@redhat.com>
+In-Reply-To: <cover.1525946601.git.lorenzo.bianconi@redhat.com>
+References: <cover.1525946601.git.lorenzo.bianconi@redhat.com>
+From: Lorenzo Bianconi <lorenzo.bianconi@redhat.com>
+Date: Thu, 26 Apr 2018 16:35:46 +0200
+Subject: [PATCH 1/1] ovn-nbctl: Show gw chassis in decreasing prio order.
+
+Report gateway chassis in decreasing priority order running ovn-nbctl
+show sub-command. Add get_ordered_gw_chassis_prio_list routine to sort
+gw chassis according to the configured priority
+
+Acked-by: Mark Michelson <mmichels@redhat.com>
+Signed-off-by: Lorenzo Bianconi <lorenzo.bianconi@redhat.com>
+Signed-off-by: Ben Pfaff <blp@ovn.org>
+---
+ ovn/utilities/ovn-nbctl.c | 64 +++++++++++++++++++++++++++++------------------
+ tests/ovn-nbctl.at        |  9 +++++++
+ 2 files changed, 48 insertions(+), 25 deletions(-)
+
+--- a/ovn/utilities/ovn-nbctl.c
++++ b/ovn/utilities/ovn-nbctl.c
+@@ -588,6 +588,38 @@ print_alias(const struct smap *external_
+     }
+ }
+ 
++/* gateway_chassis ordering
++ *  */
++static int
++compare_chassis_prio_(const void *gc1_, const void *gc2_)
++{
++    const struct nbrec_gateway_chassis *const *gc1p = gc1_;
++    const struct nbrec_gateway_chassis *const *gc2p = gc2_;
++    const struct nbrec_gateway_chassis *gc1 = *gc1p;
++    const struct nbrec_gateway_chassis *gc2 = *gc2p;
++
++    int prio_diff = gc2->priority - gc1->priority;
++    if (!prio_diff) {
++        return strcmp(gc2->name, gc1->name);
++    }
++    return prio_diff;
++}
++
++static const struct nbrec_gateway_chassis **
++get_ordered_gw_chassis_prio_list(const struct nbrec_logical_router_port *lrp)
++{
++    const struct nbrec_gateway_chassis **gcs;
++    int i;
++
++    gcs = xmalloc(sizeof *gcs * lrp->n_gateway_chassis);
++    for (i = 0; i < lrp->n_gateway_chassis; i++) {
++        gcs[i] = lrp->gateway_chassis[i];
++    }
++
++    qsort(gcs, lrp->n_gateway_chassis, sizeof *gcs, compare_chassis_prio_);
++    return gcs;
++}
++
+ /* Given pointer to logical router, this routine prints the router
+  * information.  */
+ static void
+@@ -616,12 +648,17 @@ print_lr(const struct nbrec_logical_rout
+         }
+ 
+         if (lrp->n_gateway_chassis) {
++            const struct nbrec_gateway_chassis **gcs;
++
++            gcs = get_ordered_gw_chassis_prio_list(lrp);
+             ds_put_cstr(s, "        gateway chassis: [");
+             for (size_t j = 0; j < lrp->n_gateway_chassis; j++) {
+-                ds_put_format(s, "%s ", lrp->gateway_chassis[j]->chassis_name);
++                const struct nbrec_gateway_chassis *gc = gcs[j];
++                ds_put_format(s, "%s ", gc->chassis_name);
+             }
+             ds_chomp(s, ' ');
+             ds_put_cstr(s, "]\n");
++            free(gcs);
+         }
+     }
+ 
+@@ -2835,23 +2872,6 @@ nbctl_lrp_del_gateway_chassis(struct ctl
+               chassis_name, ctx->argv[1]);
+ }
+ 
+-/* gateway_chassis ordering
+- *  */
+-static int
+-compare_chassis_prio_(const void *gc1_, const void *gc2_)
+-{
+-    const struct nbrec_gateway_chassis *const *gc1p = gc1_;
+-    const struct nbrec_gateway_chassis *const *gc2p = gc2_;
+-    const struct nbrec_gateway_chassis *gc1 = *gc1p;
+-    const struct nbrec_gateway_chassis *gc2 = *gc2p;
+-
+-    int prio_diff = gc2->priority - gc1->priority;
+-    if (!prio_diff) {
+-        return strcmp(gc2->name, gc1->name);
+-    }
+-    return prio_diff;
+-}
+-
+ /* Print a list of gateway chassis. */
+ static void
+ nbctl_lrp_get_gateway_chassis(struct ctl_context *ctx)
+@@ -2862,13 +2882,7 @@ nbctl_lrp_get_gateway_chassis(struct ctl
+     size_t i;
+ 
+     lrp = lrp_by_name_or_uuid(ctx, id, true);
+-
+-    gcs = xmalloc(sizeof *gcs * lrp->n_gateway_chassis);
+-    for (i = 0; i < lrp->n_gateway_chassis; i++) {
+-        gcs[i] = lrp->gateway_chassis[i];
+-    }
+-
+-    qsort(gcs, lrp->n_gateway_chassis, sizeof *gcs, compare_chassis_prio_);
++    gcs = get_ordered_gw_chassis_prio_list(lrp);
+ 
+     for (i = 0; i < lrp->n_gateway_chassis; i++) {
+         const struct nbrec_gateway_chassis *gc = gcs[i];
+--- a/tests/ovn-nbctl.at
++++ b/tests/ovn-nbctl.at
+@@ -1053,6 +1053,15 @@ lrp0-chassis2     5
+ AT_CHECK([ovn-nbctl lrp-del-gateway-chassis lrp0 chassis2])
+ AT_CHECK([ovn-nbctl lrp-get-gateway-chassis lrp0])
+ 
++AT_CHECK([ovn-nbctl lrp-set-gateway-chassis lrp0 chassis1 1])
++AT_CHECK([ovn-nbctl lrp-set-gateway-chassis lrp0 chassis2 10])
++AT_CHECK([ovn-nbctl lrp-set-gateway-chassis lrp0 chassis3 5])
++AT_CHECK([ovn-nbctl lrp-get-gateway-chassis lrp0], [0], [dnl
++lrp0-chassis2    10
++lrp0-chassis3     5
++lrp0-chassis1     1
++])
++
+ OVN_NBCTL_TEST_STOP
+ AT_CLEANUP
+ 

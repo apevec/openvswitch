@@ -1,0 +1,65 @@
+From cef8e1fa7a8f030ca221f8cac5893c686b9d0f00 Mon Sep 17 00:00:00 2001
+From: Jakub Sitnicki <jkbs@redhat.com>
+Date: Wed, 18 Apr 2018 18:01:14 +0200
+Subject: [PATCH] python: Fix a double encoding attempt on an Unicode string
+
+Encoding from 'unicode' to 'str' that has been added to the Stream class
+in commit 2254074e3067 ("python: fix python3 encode/decode on Windows")
+conflicts with SSLStream which already contains a quirk for pyopenssl
+that does the same thing.
+
+This results in a double encoding attempt when SSL is used and we crash
+and burn due to:
+
+Traceback (most recent call last):
+  File "../.././test-ovsdb.py", line 874, in <module>
+    main(sys.argv)
+  File "../.././test-ovsdb.py", line 869, in main
+    func(*args)
+  File "../.././test-ovsdb.py", line 655, in do_idl
+    idl_set(idl, command, step)
+  File "../.././test-ovsdb.py", line 526, in idl_set
+    status = txn.commit_block()
+  File "/home/jkbs/src/ovs/python/ovs/db/idl.py", line 1405, in commit_block
+    status = self.commit()
+  File "/home/jkbs/src/ovs/python/ovs/db/idl.py", line 1388, in commit
+    if not self.idl._session.send(msg):
+  File "/home/jkbs/src/ovs/python/ovs/jsonrpc.py", line 540, in send
+    return self.rpc.send(msg)
+  File "/home/jkbs/src/ovs/python/ovs/jsonrpc.py", line 244, in send
+    self.run()
+  File "/home/jkbs/src/ovs/python/ovs/jsonrpc.py", line 203, in run
+    retval = self.stream.send(self.output)
+  File "/home/jkbs/src/ovs/python/ovs/stream.py", line 808, in send
+    return super(SSLStream, self).send(buf)
+  File "/home/jkbs/src/ovs/python/ovs/stream.py", line 391, in send
+    buf = buf.encode('utf-8')
+UnicodeDecodeError: 'ascii' codec can't decode byte 0xc2 in position 83: ordinal not in range(128)
+
+Remove the quirk from SSLStream as the base class now does encoding.
+
+Reported-by: Marcin Mirecki <mmirecki@redhat.com>
+Signed-off-by: Jakub Sitnicki <jkbs@redhat.com>
+Signed-off-by: Ben Pfaff <blp@ovn.org>
+---
+ python/ovs/stream.py | 4 ----
+ 1 file changed, 4 deletions(-)
+
+diff --git a/python/ovs/stream.py b/python/ovs/stream.py
+index c8b96b073..7b15bcd7d 100644
+--- a/python/ovs/stream.py
++++ b/python/ovs/stream.py
+@@ -801,10 +801,6 @@ class SSLStream(Stream):
+ 
+     def send(self, buf):
+         try:
+-            if isinstance(buf, six.text_type):
+-                # Convert to byte stream if the buffer is string type/unicode.
+-                # pyopenssl version 0.14 expects the buffer to be byte string.
+-                buf = buf.encode('utf-8')
+             return super(SSLStream, self).send(buf)
+         except SSL.WantWriteError:
+             return -errno.EAGAIN
+-- 
+2.14.3
+

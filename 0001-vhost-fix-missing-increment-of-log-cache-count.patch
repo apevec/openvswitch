@@ -1,0 +1,34 @@
+From 511b413bbcbd711dcf582485a72213fa90595cbe Mon Sep 17 00:00:00 2001
+From: Maxime Coquelin <maxime.coquelin@redhat.com>
+Date: Fri, 15 Jun 2018 15:48:46 +0200
+Subject: [PATCH] vhost: fix missing increment of log cache count
+
+The log_cache_nb_elem was never incremented, resulting
+in all dirty pages to be missed during live migration.
+
+Fixes: c16915b87109 ("vhost: improve dirty pages logging performance")
+Cc: stable@dpdk.org
+
+Reported-by: Peng He <xnhp0320@icloud.com>
+Signed-off-by: Maxime Coquelin <maxime.coquelin@redhat.com>
+Acked-by: Ilya Maximets <i.maximets@samsung.com>
+Reviewed-by: Tiwei Bie <tiwei.bie@intel.com>
+---
+ lib/librte_vhost/vhost.h | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/dpdk-17.11/lib/librte_vhost/vhost.h b/dpdk-17.11/lib/librte_vhost/vhost.h
+index 528e01c8f..786a74f64 100644
+--- a/dpdk-17.11/lib/librte_vhost/vhost.h
++++ b/dpdk-17.11/lib/librte_vhost/vhost.h
+@@ -429,6 +429,7 @@ vhost_log_cache_page(struct virtio_net *dev, struct vhost_virtqueue *vq,
+ 
+ 	vq->log_cache[i].offset = offset;
+ 	vq->log_cache[i].val = (1UL << bit_nr);
++	vq->log_cache_nb_elem++;
+ }
+ 
+ static __rte_always_inline void
+-- 
+2.17.1
+

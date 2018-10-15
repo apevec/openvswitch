@@ -1,0 +1,74 @@
+From 37771844a05c7b0a7b039dcae1b4b0a69b4acced Mon Sep 17 00:00:00 2001
+From: Maxime Coquelin <maxime.coquelin@redhat.com>
+Date: Mon, 5 Feb 2018 16:04:56 +0100
+Subject: [PATCH] vhost: fix IOTLB pool out-of-memory handling
+
+In the unlikely case the IOTLB memory pool runs out of memory,
+an issue may happen if all entries are used by the IOTLB cache,
+and an IOTLB miss happen. If the iotlb pending list is empty,
+then no memory is freed and allocation fails a second time.
+
+This patch fixes this by doing an IOTLB cache random evict if
+the IOTLB pending list is empty, ensuring the second allocation
+try will succeed.
+
+In the same spirit, the opposite is done when inserting an
+IOTLB entry in the IOTLB cache fails due to out of memory. In
+this case, the IOTLB pending is flushed if the IOTLB cache is
+empty to ensure the new entry can be inserted.
+
+Fixes: d012d1f293f4 ("vhost: add IOTLB helper functions")
+Fixes: f72c2ad63aeb ("vhost: add pending IOTLB miss request list and helpers")
+Cc: stable@dpdk.org
+
+Signed-off-by: Maxime Coquelin <maxime.coquelin@redhat.com>
+---
+ lib/librte_vhost/iotlb.c | 18 +++++++++++++-----
+ 1 file changed, 13 insertions(+), 5 deletions(-)
+
+diff --git a/dpdk-17.11/lib/librte_vhost/iotlb.c b/dpdk-17.11/lib/librte_vhost/iotlb.c
+index b74cc6a78..72cd27df8 100644
+--- a/dpdk-17.11/lib/librte_vhost/iotlb.c
++++ b/dpdk-17.11/lib/librte_vhost/iotlb.c
+@@ -50,6 +50,9 @@ struct vhost_iotlb_entry {
+ 
+ #define IOTLB_CACHE_SIZE 2048
+ 
++static void
++vhost_user_iotlb_cache_random_evict(struct vhost_virtqueue *vq);
++
+ static void
+ vhost_user_iotlb_pending_remove_all(struct vhost_virtqueue *vq)
+ {
+@@ -95,9 +98,11 @@ vhost_user_iotlb_pending_insert(struct vhost_virtqueue *vq,
+ 
+ 	ret = rte_mempool_get(vq->iotlb_pool, (void **)&node);
+ 	if (ret) {
+-		RTE_LOG(INFO, VHOST_CONFIG,
+-				"IOTLB pool empty, clear pending misses\n");
+-		vhost_user_iotlb_pending_remove_all(vq);
++		RTE_LOG(DEBUG, VHOST_CONFIG, "IOTLB pool empty, clear entries\n");
++		if (!TAILQ_EMPTY(&vq->iotlb_pending_list))
++			vhost_user_iotlb_pending_remove_all(vq);
++		else
++			vhost_user_iotlb_cache_random_evict(vq);
+ 		ret = rte_mempool_get(vq->iotlb_pool, (void **)&node);
+ 		if (ret) {
+ 			RTE_LOG(ERR, VHOST_CONFIG, "IOTLB pool still empty, failure\n");
+@@ -186,8 +191,11 @@ vhost_user_iotlb_cache_insert(struct vhost_virtqueue *vq, uint64_t iova,
+ 
+ 	ret = rte_mempool_get(vq->iotlb_pool, (void **)&new_node);
+ 	if (ret) {
+-		RTE_LOG(DEBUG, VHOST_CONFIG, "IOTLB pool empty, evict one entry\n");
+-		vhost_user_iotlb_cache_random_evict(vq);
++		RTE_LOG(DEBUG, VHOST_CONFIG, "IOTLB pool empty, clear entries\n");
++		if (!TAILQ_EMPTY(&vq->iotlb_list))
++			vhost_user_iotlb_cache_random_evict(vq);
++		else
++			vhost_user_iotlb_pending_remove_all(vq);
+ 		ret = rte_mempool_get(vq->iotlb_pool, (void **)&new_node);
+ 		if (ret) {
+ 			RTE_LOG(ERR, VHOST_CONFIG, "IOTLB pool still empty, failure\n");
+-- 
+2.14.3
+

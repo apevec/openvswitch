@@ -1,0 +1,47 @@
+From d01327d95624923003b6e984040c8c17c06b5361 Mon Sep 17 00:00:00 2001
+From: Shahaf Shuler <shahafs@mellanox.com>
+Date: Thu, 25 Jan 2018 18:18:03 +0200
+Subject: [PATCH] net/mlx5: fix memory region boundary checks
+
+[ upstream commit 25f28d9d294d00a1c539d47a13c14ce282e31b09 ]
+
+Since commit f81ec748434b ("net/mlx5: fix memory region lookup") the
+Memory Region (MR) are no longer overlaps.
+
+Comparing the end address of the MR should be exclusive, otherwise two
+contiguous MRs may cause wrong matching.
+
+Fixes: f81ec748434b ("net/mlx5: fix memory region lookup")
+
+Signed-off-by: Xueming Li <xuemingl@mellanox.com>
+Signed-off-by: Shahaf Shuler <shahafs@mellanox.com>
+Acked-by: Nelio Laranjeiro <nelio.laranjeiro@6wind.com>
+---
+ drivers/net/mlx5/mlx5_rxtx.h | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/dpdk-17.11/drivers/net/mlx5/mlx5_rxtx.h b/dpdk-17.11/drivers/net/mlx5/mlx5_rxtx.h
+index 604f30849..de5b769ef 100644
+--- a/dpdk-17.11/drivers/net/mlx5/mlx5_rxtx.h
++++ b/dpdk-17.11/drivers/net/mlx5/mlx5_rxtx.h
+@@ -547,7 +547,7 @@ mlx5_tx_mb2mr(struct mlx5_txq_data *txq, struct rte_mbuf *mb)
+ 	struct mlx5_mr *mr;
+ 
+ 	assert(i < RTE_DIM(txq->mp2mr));
+-	if (likely(txq->mp2mr[i]->start <= addr && txq->mp2mr[i]->end >= addr))
++	if (likely(txq->mp2mr[i]->start <= addr && txq->mp2mr[i]->end > addr))
+ 		return txq->mp2mr[i]->lkey;
+ 	for (i = 0; (i != RTE_DIM(txq->mp2mr)); ++i) {
+ 		if (unlikely(txq->mp2mr[i] == NULL ||
+@@ -556,7 +556,7 @@ mlx5_tx_mb2mr(struct mlx5_txq_data *txq, struct rte_mbuf *mb)
+ 			break;
+ 		}
+ 		if (txq->mp2mr[i]->start <= addr &&
+-		    txq->mp2mr[i]->end >= addr) {
++		    txq->mp2mr[i]->end > addr) {
+ 			assert(txq->mp2mr[i]->lkey != (uint32_t)-1);
+ 			assert(rte_cpu_to_be_32(txq->mp2mr[i]->mr->lkey) ==
+ 			       txq->mp2mr[i]->lkey);
+-- 
+2.14.3
+

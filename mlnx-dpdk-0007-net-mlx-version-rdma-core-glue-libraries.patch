@@ -1,0 +1,206 @@
+From 4e2ccd92941f2865efa749169e7f77064f501121 Mon Sep 17 00:00:00 2001
+From: Adrien Mazarguil <adrien.mazarguil@6wind.com>
+Date: Thu, 1 Feb 2018 14:30:57 +0100
+Subject: [PATCH 7/9] net/mlx: version rdma-core glue libraries
+
+When built as separate objects, these libraries do not have unique names.
+Since they do not maintain a stable ABI, loading an incompatible library
+may result in a crash (e.g. in case multiple versions are installed).
+
+This patch addresses the above by versioning glue libraries, both on the
+file system (version suffix) and by comparing a dedicated version field
+member in glue structures.
+
+Signed-off-by: Adrien Mazarguil <adrien.mazarguil@6wind.com>
+(cherry picked from commit a193e731131f460d3c2d59cac0b4f1a34eac92d2)
+---
+ drivers/net/mlx4/Makefile    | 8 ++++++--
+ drivers/net/mlx4/mlx4.c      | 5 +++++
+ drivers/net/mlx4/mlx4_glue.c | 1 +
+ drivers/net/mlx4/mlx4_glue.h | 6 ++++++
+ drivers/net/mlx5/Makefile    | 8 ++++++--
+ drivers/net/mlx5/mlx5.c      | 5 +++++
+ drivers/net/mlx5/mlx5_glue.c | 1 +
+ drivers/net/mlx5/mlx5_glue.h | 6 ++++++
+ 8 files changed, 36 insertions(+), 4 deletions(-)
+
+diff --git a/dpdk-17.11/drivers/net/mlx4/Makefile b/dpdk-17.11/drivers/net/mlx4/Makefile
+index 60ee120..d24565c 100644
+--- a/dpdk-17.11/drivers/net/mlx4/Makefile
++++ b/dpdk-17.11/drivers/net/mlx4/Makefile
+@@ -33,7 +33,9 @@ include $(RTE_SDK)/mk/rte.vars.mk
+ 
+ # Library name.
+ LIB = librte_pmd_mlx4.a
+-LIB_GLUE = librte_pmd_mlx4_glue.so
++LIB_GLUE = $(LIB_GLUE_BASE).$(LIB_GLUE_VERSION)
++LIB_GLUE_BASE = librte_pmd_mlx4_glue.so
++LIB_GLUE_VERSION = 17.11.1
+ 
+ # Sources.
+ SRCS-$(CONFIG_RTE_LIBRTE_MLX4_PMD) += mlx4.c
+@@ -64,6 +66,7 @@ CFLAGS += -D_XOPEN_SOURCE=600
+ CFLAGS += $(WERROR_FLAGS)
+ ifeq ($(CONFIG_RTE_LIBRTE_MLX4_DLOPEN_DEPS),y)
+ CFLAGS += -DMLX4_GLUE='"$(LIB_GLUE)"'
++CFLAGS += -DMLX4_GLUE_VERSION='"$(LIB_GLUE_VERSION)"'
+ CFLAGS_mlx4_glue.o += -fPIC
+ LDLIBS += -ldl
+ else
+@@ -135,6 +138,7 @@ $(LIB): $(LIB_GLUE)
+ 
+ $(LIB_GLUE): mlx4_glue.o
+ 	$Q $(LD) $(LDFLAGS) $(EXTRA_LDFLAGS) \
++		-Wl,-h,$(LIB_GLUE) \
+ 		-s -shared -o $@ $< -libverbs -lmlx4
+ 
+ mlx4_glue.o: mlx4_autoconf.h
+@@ -143,6 +147,6 @@ endif
+ 
+ clean_mlx4: FORCE
+ 	$Q rm -f -- mlx4_autoconf.h mlx4_autoconf.h.new
+-	$Q rm -f -- mlx4_glue.o $(LIB_GLUE)
++	$Q rm -f -- mlx4_glue.o $(LIB_GLUE_BASE)*
+ 
+ clean: clean_mlx4
+diff --git a/dpdk-17.11/drivers/net/mlx4/mlx4.c b/dpdk-17.11/drivers/net/mlx4/mlx4.c
+index 43d1b0a..e41acf1 100644
+--- a/dpdk-17.11/drivers/net/mlx4/mlx4.c
++++ b/dpdk-17.11/drivers/net/mlx4/mlx4.c
+@@ -773,6 +773,11 @@ struct mlx4_conf {
+ 			assert(((const void *const *)mlx4_glue)[i]);
+ 	}
+ #endif
++	if (strcmp(mlx4_glue->version, MLX4_GLUE_VERSION)) {
++		ERROR("rdma-core glue \"%s\" mismatch: \"%s\" is required",
++		      mlx4_glue->version, MLX4_GLUE_VERSION);
++		return;
++	}
+ 	mlx4_glue->fork_init();
+ 	rte_pci_register(&mlx4_driver);
+ }
+diff --git a/dpdk-17.11/drivers/net/mlx4/mlx4_glue.c b/dpdk-17.11/drivers/net/mlx4/mlx4_glue.c
+index 47ae7ad..3b79d32 100644
+--- a/dpdk-17.11/drivers/net/mlx4/mlx4_glue.c
++++ b/dpdk-17.11/drivers/net/mlx4/mlx4_glue.c
+@@ -240,6 +240,7 @@
+ }
+ 
+ const struct mlx4_glue *mlx4_glue = &(const struct mlx4_glue){
++	.version = MLX4_GLUE_VERSION,
+ 	.fork_init = mlx4_glue_fork_init,
+ 	.get_async_event = mlx4_glue_get_async_event,
+ 	.ack_async_event = mlx4_glue_ack_async_event,
+diff --git a/dpdk-17.11/drivers/net/mlx4/mlx4_glue.h b/dpdk-17.11/drivers/net/mlx4/mlx4_glue.h
+index de251c6..368f906 100644
+--- a/dpdk-17.11/drivers/net/mlx4/mlx4_glue.h
++++ b/dpdk-17.11/drivers/net/mlx4/mlx4_glue.h
+@@ -19,7 +19,13 @@
+ #pragma GCC diagnostic error "-Wpedantic"
+ #endif
+ 
++#ifndef MLX4_GLUE_VERSION
++#define MLX4_GLUE_VERSION ""
++#endif
++
++/* LIB_GLUE_VERSION must be updated every time this structure is modified. */
+ struct mlx4_glue {
++	const char *version;
+ 	int (*fork_init)(void);
+ 	int (*get_async_event)(struct ibv_context *context,
+ 			       struct ibv_async_event *event);
+diff --git a/dpdk-17.11/drivers/net/mlx5/Makefile b/dpdk-17.11/drivers/net/mlx5/Makefile
+index 4b20d71..e75190e 100644
+--- a/dpdk-17.11/drivers/net/mlx5/Makefile
++++ b/dpdk-17.11/drivers/net/mlx5/Makefile
+@@ -33,7 +33,9 @@ include $(RTE_SDK)/mk/rte.vars.mk
+ 
+ # Library name.
+ LIB = librte_pmd_mlx5.a
+-LIB_GLUE = librte_pmd_mlx5_glue.so
++LIB_GLUE = $(LIB_GLUE_BASE).$(LIB_GLUE_VERSION)
++LIB_GLUE_BASE = librte_pmd_mlx5_glue.so
++LIB_GLUE_VERSION = 17.11.1
+ 
+ # Sources.
+ SRCS-$(CONFIG_RTE_LIBRTE_MLX5_PMD) += mlx5.c
+@@ -74,6 +76,7 @@ CFLAGS += $(WERROR_FLAGS)
+ CFLAGS += -Wno-strict-prototypes
+ ifeq ($(CONFIG_RTE_LIBRTE_MLX5_DLOPEN_DEPS),y)
+ CFLAGS += -DMLX5_GLUE='"$(LIB_GLUE)"'
++CFLAGS += -DMLX5_GLUE_VERSION='"$(LIB_GLUE_VERSION)"'
+ CFLAGS_mlx5_glue.o += -fPIC
+ LDLIBS += -ldl
+ else
+@@ -180,6 +183,7 @@ $(LIB): $(LIB_GLUE)
+ 
+ $(LIB_GLUE): mlx5_glue.o
+ 	$Q $(LD) $(LDFLAGS) $(EXTRA_LDFLAGS) \
++		-Wl,-h,$(LIB_GLUE) \
+ 		-s -shared -o $@ $< -libverbs -lmlx5
+ 
+ mlx5_glue.o: mlx5_autoconf.h
+@@ -188,6 +192,6 @@ endif
+ 
+ clean_mlx5: FORCE
+ 	$Q rm -f -- mlx5_autoconf.h mlx5_autoconf.h.new
+-	$Q rm -f -- mlx5_glue.o $(LIB_GLUE)
++	$Q rm -f -- mlx5_glue.o $(LIB_GLUE_BASE)*
+ 
+ clean: clean_mlx5
+diff --git a/dpdk-17.11/drivers/net/mlx5/mlx5.c b/dpdk-17.11/drivers/net/mlx5/mlx5.c
+index 6a3746d..6618d2c 100644
+--- a/dpdk-17.11/drivers/net/mlx5/mlx5.c
++++ b/dpdk-17.11/drivers/net/mlx5/mlx5.c
+@@ -1099,6 +1099,11 @@ struct mlx5_args {
+ 			assert(((const void *const *)mlx5_glue)[i]);
+ 	}
+ #endif
++	if (strcmp(mlx5_glue->version, MLX5_GLUE_VERSION)) {
++		ERROR("rdma-core glue \"%s\" mismatch: \"%s\" is required",
++		      mlx5_glue->version, MLX5_GLUE_VERSION);
++		return;
++	}
+ 	mlx5_glue->fork_init();
+ 	rte_pci_register(&mlx5_driver);
+ }
+diff --git a/dpdk-17.11/drivers/net/mlx5/mlx5_glue.c b/dpdk-17.11/drivers/net/mlx5/mlx5_glue.c
+index ff48c1e..eba0ca0 100644
+--- a/dpdk-17.11/drivers/net/mlx5/mlx5_glue.c
++++ b/dpdk-17.11/drivers/net/mlx5/mlx5_glue.c
+@@ -314,6 +314,7 @@
+ }
+ 
+ const struct mlx5_glue *mlx5_glue = &(const struct mlx5_glue){
++	.version = MLX5_GLUE_VERSION,
+ 	.fork_init = mlx5_glue_fork_init,
+ 	.alloc_pd = mlx5_glue_alloc_pd,
+ 	.dealloc_pd = mlx5_glue_dealloc_pd,
+diff --git a/dpdk-17.11/drivers/net/mlx5/mlx5_glue.h b/dpdk-17.11/drivers/net/mlx5/mlx5_glue.h
+index a2cd18e..0e6e65f 100644
+--- a/dpdk-17.11/drivers/net/mlx5/mlx5_glue.h
++++ b/dpdk-17.11/drivers/net/mlx5/mlx5_glue.h
+@@ -19,6 +19,10 @@
+ #pragma GCC diagnostic error "-Wpedantic"
+ #endif
+ 
++#ifndef MLX5_GLUE_VERSION
++#define MLX5_GLUE_VERSION ""
++#endif
++
+ #ifndef HAVE_IBV_DEVICE_COUNTERS_SET_SUPPORT
+ struct ibv_counter_set;
+ struct ibv_counter_set_data;
+@@ -27,7 +31,9 @@
+ struct ibv_query_counter_set_attr;
+ #endif
+ 
++/* LIB_GLUE_VERSION must be updated every time this structure is modified. */
+ struct mlx5_glue {
++	const char *version;
+ 	int (*fork_init)(void);
+ 	struct ibv_pd *(*alloc_pd)(struct ibv_context *context);
+ 	int (*dealloc_pd)(struct ibv_pd *pd);
+-- 
+1.8.3.1
+

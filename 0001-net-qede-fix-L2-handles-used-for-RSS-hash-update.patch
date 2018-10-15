@@ -1,0 +1,36 @@
+From 3a1a1f3f1344c8a3bc0b06cd23e97b3922a91a61 Mon Sep 17 00:00:00 2001
+Message-Id: <3a1a1f3f1344c8a3bc0b06cd23e97b3922a91a61.1528327303.git.tredaelli@redhat.com>
+From: Rasesh Mody <rasesh.mody@cavium.com>
+Date: Tue, 5 Jun 2018 16:03:57 -0700
+Subject: [PATCH] net/qede: fix L2-handles used for RSS hash update
+
+Fix fast path array index which is used for passing L2 handles to RSS
+indirection table, properly distribute rxq handles for indirection table.
+Currently, it is using the local copy of indirection table. When the RX
+queue configuration changes the local copy becomes invalid.
+
+Fixes: 69d7ba88f1a1 ("net/qede/base: use L2-handles for RSS configuration")
+Cc: stable@dpdk.org
+
+Signed-off-by: Rasesh Mody <rasesh.mody@cavium.com>
+Reviewed-by: Kevin Traynor <ktraynor@redhat.com>
+---
+ drivers/net/qede/qede_ethdev.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/dpdk-17.11/drivers/net/qede/qede_ethdev.c b/dpdk-17.11/drivers/net/qede/qede_ethdev.c
+index 137f91060..cd9ec1070 100644
+--- a/dpdk-17.11/drivers/net/qede/qede_ethdev.c
++++ b/dpdk-17.11/drivers/net/qede/qede_ethdev.c
+@@ -2251,7 +2251,7 @@ int qede_rss_hash_update(struct rte_eth_dev *eth_dev,
+ 	vport_update_params.vport_id = 0;
+ 	/* pass the L2 handles instead of qids */
+ 	for (i = 0 ; i < ECORE_RSS_IND_TABLE_SIZE ; i++) {
+-		idx = qdev->rss_ind_table[i];
++		idx = i % QEDE_RSS_COUNT(qdev);
+ 		rss_params.rss_ind_table[i] = qdev->fp_array[idx].rxq->handle;
+ 	}
+ 	vport_update_params.rss_params = &rss_params;
+-- 
+2.17.0
+

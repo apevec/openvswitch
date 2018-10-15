@@ -1,0 +1,268 @@
+From a5c9b9278cd4fa0b61db045ed19df449f07ab139 Mon Sep 17 00:00:00 2001
+From: Thomas Monjalon <thomas@monjalon.net>
+Date: Fri, 27 Apr 2018 03:49:19 +0200
+Subject: [PATCH 2/2] eal: fix build on FreeBSD
+
+The auxiliary vector read is implemented only for Linux.
+It could be done with procstat_getauxv() for FreeBSD.
+
+Since the commit below, the auxiliary vector functions
+are compiled for every architectures, including x86
+which is tested with FreeBSD.
+
+This patch is moving the Linux implementation in Linux directory,
+and adding a fake/empty implementation for FreeBSD.
+
+Fixes: 2ed9bf330709 ("eal: abstract away the auxiliary vector")
+
+Signed-off-by: Thomas Monjalon <thomas@monjalon.net>
+Acked-by: Maxime Coquelin <maxime.coquelin@redhat.com>
+---
+ lib/librte_eal/bsdapp/eal/Makefile          |  1 +
+ lib/librte_eal/bsdapp/eal/eal_cpuflags.c    | 21 ++++++
+ lib/librte_eal/common/eal_common_cpuflags.c | 79 -------------------
+ lib/librte_eal/linuxapp/eal/Makefile        |  1 +
+ lib/librte_eal/linuxapp/eal/eal_cpuflags.c  | 84 +++++++++++++++++++++
+ 7 files changed, 109 insertions(+), 79 deletions(-)
+ create mode 100644 lib/librte_eal/bsdapp/eal/eal_cpuflags.c
+ create mode 100644 lib/librte_eal/linuxapp/eal/eal_cpuflags.c
+
+diff --git a/dpdk-17.11/lib/librte_eal/bsdapp/eal/Makefile b/dpdk-17.11/lib/librte_eal/bsdapp/eal/Makefile
+index 200285e01..3fd33f1e4 100644
+--- a/dpdk-17.11/lib/librte_eal/bsdapp/eal/Makefile
++++ b/dpdk-17.11/lib/librte_eal/bsdapp/eal/Makefile
+@@ -25,6 +25,7 @@ LIBABIVER := 7
+ 
+ # specific to bsdapp exec-env
+ SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) := eal.c
++SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) += eal_cpuflags.c
+ SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) += eal_memory.c
+ SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) += eal_hugepage_info.c
+ SRCS-$(CONFIG_RTE_EXEC_ENV_BSDAPP) += eal_thread.c
+diff --git a/dpdk-17.11/lib/librte_eal/bsdapp/eal/eal_cpuflags.c b/dpdk-17.11/lib/librte_eal/bsdapp/eal/eal_cpuflags.c
+new file mode 100644
+index 000000000..69b161ea6
+--- /dev/null
++++ b/dpdk-17.11/lib/librte_eal/bsdapp/eal/eal_cpuflags.c
+@@ -0,0 +1,21 @@
++/* SPDX-License-Identifier: BSD-3-Clause
++ * Copyright 2018 Mellanox Technologies, Ltd
++ */
++
++#include <rte_common.h>
++#include <rte_cpuflags.h>
++
++unsigned long
++rte_cpu_getauxval(unsigned long type __rte_unused)
++{
++	/* not implemented */
++	return 0;
++}
++
++int
++rte_cpu_strcmp_auxval(unsigned long type __rte_unused,
++		const char *str __rte_unused)
++{
++	/* not implemented */
++	return -1;
++}
+diff --git a/dpdk-17.11/lib/librte_eal/common/eal_common_cpuflags.c b/dpdk-17.11/lib/librte_eal/common/eal_common_cpuflags.c
+index 6a9dbaeb1..3a055f7c7 100644
+--- a/dpdk-17.11/lib/librte_eal/common/eal_common_cpuflags.c
++++ b/dpdk-17.11/lib/librte_eal/common/eal_common_cpuflags.c
+@@ -2,90 +2,11 @@
+  *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  */
+ 
+-#include <elf.h>
+-#include <fcntl.h>
+ #include <stdio.h>
+-#include <string.h>
+-#include <sys/stat.h>
+-#include <sys/types.h>
+-#include <unistd.h>
+-
+-#if defined(__GLIBC__) && defined(__GLIBC_PREREQ)
+-#if __GLIBC_PREREQ(2, 16)
+-#include <sys/auxv.h>
+-#define HAS_AUXV 1
+-#endif
+-#endif
+ 
+ #include <rte_common.h>
+ #include <rte_cpuflags.h>
+ 
+-#ifndef HAS_AUXV
+-static unsigned long
+-getauxval(unsigned long type __rte_unused)
+-{
+-	errno = ENOTSUP;
+-	return 0;
+-}
+-#endif
+-
+-#ifdef RTE_ARCH_64
+-typedef Elf64_auxv_t Internal_Elfx_auxv_t;
+-#else
+-typedef Elf32_auxv_t Internal_Elfx_auxv_t;
+-#endif
+-
+-
+-/**
+- * Provides a method for retrieving values from the auxiliary vector and
+- * possibly running a string comparison.
+- *
+- * @return Always returns a result.  When the result is 0, check errno
+- * to see if an error occurred during processing.
+- */
+-static unsigned long
+-_rte_cpu_getauxval(unsigned long type, const char *str)
+-{
+-	unsigned long val;
+-
+-	errno = 0;
+-	val = getauxval(type);
+-
+-	if (!val && (errno == ENOTSUP || errno == ENOENT)) {
+-		int auxv_fd = open("/proc/self/auxv", O_RDONLY);
+-		Internal_Elfx_auxv_t auxv;
+-
+-		if (auxv_fd == -1)
+-			return 0;
+-
+-		errno = ENOENT;
+-		while (read(auxv_fd, &auxv, sizeof(auxv)) == sizeof(auxv)) {
+-			if (auxv.a_type == type) {
+-				errno = 0;
+-				val = auxv.a_un.a_val;
+-				if (str)
+-					val = strcmp((const char *)val, str);
+-				break;
+-			}
+-		}
+-		close(auxv_fd);
+-	}
+-
+-	return val;
+-}
+-
+-unsigned long
+-rte_cpu_getauxval(unsigned long type)
+-{
+-	return _rte_cpu_getauxval(type, NULL);
+-}
+-
+-int
+-rte_cpu_strcmp_auxval(unsigned long type, const char *str)
+-{
+-	return _rte_cpu_getauxval(type, str);
+-}
+-
+ /**
+  * Checks if the machine is adequate for running the binary. If it is not, the
+  * program exits with status 1.
+diff --git a/dpdk-17.11/lib/librte_eal/linuxapp/eal/Makefile b/dpdk-17.11/lib/librte_eal/linuxapp/eal/Makefile
+index 45517a27b..3719ec9d7 100644
+--- a/dpdk-17.11/lib/librte_eal/linuxapp/eal/Makefile
++++ b/dpdk-17.11/lib/librte_eal/linuxapp/eal/Makefile
+@@ -30,6 +30,7 @@ endif
+ 
+ # specific to linuxapp exec-env
+ SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) := eal.c
++SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_cpuflags.c
+ SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_hugepage_info.c
+ SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_memory.c
+ SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_thread.c
+diff --git a/dpdk-17.11/lib/librte_eal/linuxapp/eal/eal_cpuflags.c b/dpdk-17.11/lib/librte_eal/linuxapp/eal/eal_cpuflags.c
+new file mode 100644
+index 000000000..d38296e1e
+--- /dev/null
++++ b/dpdk-17.11/lib/librte_eal/linuxapp/eal/eal_cpuflags.c
+@@ -0,0 +1,84 @@
++/* SPDX-License-Identifier: BSD-3-Clause
++ * Copyright 2018 Red Hat, Inc.
++ */
++
++#include <elf.h>
++#include <fcntl.h>
++#include <string.h>
++#include <sys/stat.h>
++#include <sys/types.h>
++#include <unistd.h>
++
++#if defined(__GLIBC__) && defined(__GLIBC_PREREQ)
++#if __GLIBC_PREREQ(2, 16)
++#include <sys/auxv.h>
++#define HAS_AUXV 1
++#endif
++#endif
++
++#include <rte_cpuflags.h>
++
++#ifndef HAS_AUXV
++static unsigned long
++getauxval(unsigned long type __rte_unused)
++{
++	errno = ENOTSUP;
++	return 0;
++}
++#endif
++
++#ifdef RTE_ARCH_64
++typedef Elf64_auxv_t Internal_Elfx_auxv_t;
++#else
++typedef Elf32_auxv_t Internal_Elfx_auxv_t;
++#endif
++
++/**
++ * Provides a method for retrieving values from the auxiliary vector and
++ * possibly running a string comparison.
++ *
++ * @return Always returns a result.  When the result is 0, check errno
++ * to see if an error occurred during processing.
++ */
++static unsigned long
++_rte_cpu_getauxval(unsigned long type, const char *str)
++{
++	unsigned long val;
++
++	errno = 0;
++	val = getauxval(type);
++
++	if (!val && (errno == ENOTSUP || errno == ENOENT)) {
++		int auxv_fd = open("/proc/self/auxv", O_RDONLY);
++		Internal_Elfx_auxv_t auxv;
++
++		if (auxv_fd == -1)
++			return 0;
++
++		errno = ENOENT;
++		while (read(auxv_fd, &auxv, sizeof(auxv)) == sizeof(auxv)) {
++			if (auxv.a_type == type) {
++				errno = 0;
++				val = auxv.a_un.a_val;
++				if (str)
++					val = strcmp((const char *)val, str);
++				break;
++			}
++		}
++		close(auxv_fd);
++	}
++
++	return val;
++}
++
++unsigned long
++rte_cpu_getauxval(unsigned long type)
++{
++	return _rte_cpu_getauxval(type, NULL);
++}
++
++int
++rte_cpu_strcmp_auxval(unsigned long type, const char *str)
++{
++	return _rte_cpu_getauxval(type, str);
++}
+-- 
+2.17.0
+

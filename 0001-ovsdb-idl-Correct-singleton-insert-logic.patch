@@ -1,0 +1,271 @@
+From 857d8302cc841860faf4ed6dc3bd5b5275678b33 Mon Sep 17 00:00:00 2001
+From: Mark Michelson <mmichels@redhat.com>
+Date: Thu, 17 May 2018 13:16:55 -0400
+Subject: [PATCH] ovsdb-idl: Correct singleton insert logic
+
+When inserting data into a "singleton" table (one that has maxRows ==
+1), there is a check that ensures that the table is currently empty
+before inserting the row. The intention is to prevent races where
+multiple clients might attempt to insert rows at the same time.
+
+The problem is that this singleton check can cause legitimate
+transactions to fail. Specifically, a transaction that attempts to
+delete the current content of the table and insert new data will cause
+the singleton check to fail since the table currently has data.
+
+This patch corrects the issue by keeping a count of the rows being
+deleted and added to singleton tables. If the total is larger than zero,
+then the net operation is attempting to insert rows. If the total is
+less than zero, then the net operation is attempting to remove rows. If
+the total is zero, then the operation is inserting and deleting an equal
+number of rows (or is just updating rows). We only add the singleton
+check if the total is larger than zero.
+
+This patch also includes a new test for singleton tables that ensures
+that the maxRows constraint works as expected.
+
+Signed-off-by: Mark Michelson <mmichels@redhat.com>
+Signed-off-by: Ben Pfaff <blp@ovn.org>
+(cherry picked from commit 079ace1fa41c4f583795d517506a237dc3f837a2)
+
+Conflicts: txn->db doesn't exist due to missing commit bf245efc37b1
+("ovsdb-idl: Break out database-specific stuff into new data structure.")
+so use txn->idl instead.
+---
+ lib/ovsdb-idl.c         | 50 +++++++++++++++++++++++++++--------------
+ tests/idltest.ovsschema |  9 ++++++++
+ tests/ovsdb-idl.at      | 29 +++++++++++++++++++++++-
+ tests/test-ovsdb.c      | 33 +++++++++++++++++++++++++++
+ tests/test-ovsdb.py     | 10 +++++++++
+ 5 files changed, 113 insertions(+), 18 deletions(-)
+
+diff --git a/lib/ovsdb-idl.c b/lib/ovsdb-idl.c
+index 29f893116..0f63102e6 100644
+--- a/lib/ovsdb-idl.c
++++ b/lib/ovsdb-idl.c
+@@ -3503,6 +3503,39 @@ ovsdb_idl_txn_commit(struct ovsdb_idl_txn *txn)
+ 
+     /* Add updates. */
+     any_updates = false;
++
++    /* For tables constrained to have only a single row (a fairly common OVSDB
++     * pattern for storing global data), identify whether we're inserting a
++     * row.  If so, then verify that the table is empty before inserting the
++     * row.  This gives us a clear verification-related failure if there was an
++     * insertion race with another client. */
++    for (size_t i = 0; i < txn->idl->class_->n_tables; i++) {
++        struct ovsdb_idl_table *table = &txn->idl->tables[i];
++        if (table->class_->is_singleton) {
++            /* Count the number of rows in the table before and after our
++             * transaction commits.  This is O(n) in the number of rows in the
++             * table, but that's OK since we know that the table should only
++             * have one row. */
++            size_t initial_rows = 0;
++            size_t final_rows = 0;
++            HMAP_FOR_EACH (row, hmap_node, &table->rows) {
++                initial_rows += row->old_datum != NULL;
++                final_rows += row->new_datum != NULL;
++            }
++
++            if (initial_rows == 0 && final_rows == 1) {
++                struct json *op = json_object_create();
++                json_array_add(operations, op);
++                json_object_put_string(op, "op", "wait");
++                json_object_put_string(op, "table", table->class_->name);
++                json_object_put(op, "where", json_array_create_empty());
++                json_object_put(op, "timeout", json_integer_create(0));
++                json_object_put_string(op, "until", "==");
++                json_object_put(op, "rows", json_array_create_empty());
++            }
++        }
++    }
++
+     HMAP_FOR_EACH (row, txn_node, &txn->txn_rows) {
+         const struct ovsdb_idl_table_class *class = row->table->class_;
+ 
+@@ -3521,23 +3554,6 @@ ovsdb_idl_txn_commit(struct ovsdb_idl_txn *txn)
+             struct json *row_json;
+             size_t idx;
+ 
+-            if (!row->old_datum && class->is_singleton) {
+-                /* We're inserting a row into a table that allows only a
+-                 * single row.  (This is a fairly common OVSDB pattern for
+-                 * storing global data.)  Verify that the table is empty
+-                 * before inserting the row, so that we get a clear
+-                 * verification-related failure if there was an insertion
+-                 * race with another client. */
+-                struct json *op = json_object_create();
+-                json_array_add(operations, op);
+-                json_object_put_string(op, "op", "wait");
+-                json_object_put_string(op, "table", class->name);
+-                json_object_put(op, "where", json_array_create_empty());
+-                json_object_put(op, "timeout", json_integer_create(0));
+-                json_object_put_string(op, "until", "==");
+-                json_object_put(op, "rows", json_array_create_empty());
+-            }
+-
+             struct json *op = json_object_create();
+             json_object_put_string(op, "op",
+                                    row->old_datum ? "update" : "insert");
+diff --git a/tests/idltest.ovsschema b/tests/idltest.ovsschema
+index 57b6bde15..bee79fc50 100644
+--- a/tests/idltest.ovsschema
++++ b/tests/idltest.ovsschema
+@@ -170,6 +170,15 @@
+         }
+       },
+       "isRoot" : false
++    },
++    "singleton" : {
++      "columns" : {
++        "name" : {
++          "type": "string"
++        }
++      },
++      "isRoot" : true,
++      "maxRows" : 1
+     }
+   }
+ }
+diff --git a/tests/ovsdb-idl.at b/tests/ovsdb-idl.at
+index 59b2c1991..791228e9b 100644
+--- a/tests/ovsdb-idl.at
++++ b/tests/ovsdb-idl.at
+@@ -70,7 +70,7 @@ m4_define([OVSDB_CHECK_IDL_REGISTER_COLUMNS_PYN],
+    AT_CHECK([ovsdb_start_idltest])
+    m4_if([$2], [], [],
+      [AT_CHECK([ovsdb-client transact unix:socket $2], [0], [ignore], [ignore])])
+-   AT_CHECK([$8 $srcdir/test-ovsdb.py  -t10 idl $srcdir/idltest.ovsschema unix:socket ?simple:b,ba,i,ia,r,ra,s,sa,u,ua?link1:i,k,ka,l2?link2:i,l1 $3],
++   AT_CHECK([$8 $srcdir/test-ovsdb.py  -t10 idl $srcdir/idltest.ovsschema unix:socket ?simple:b,ba,i,ia,r,ra,s,sa,u,ua?link1:i,k,ka,l2?link2:i,l1?singleton:name $3],
+             [0], [stdout], [ignore])
+    AT_CHECK([sort stdout | uuidfilt]m4_if([$6],,, [[| $6]]),
+             [0], [$4])
+@@ -695,6 +695,32 @@ OVSDB_CHECK_IDL([external-linking idl, consistent ops],
+ 003: done
+ ]])
+ 
++OVSDB_CHECK_IDL([singleton idl, constraints],
++  [],
++  [['["idltest",
++      {"op": "insert",
++       "table": "singleton",
++       "row": {"name": "foo"}}]' \
++    '["idltest",
++      {"op": "insert",
++       "table": "singleton",
++       "row": {"name": "bar"}}]' \
++    '+["idltest",
++      {"op": "delete",
++       "table": "singleton",
++       "where": [["_uuid", "==", ["uuid", "#0#"]]]},
++      {"op": "insert",
++       "table": "singleton",
++       "row": {"name": "bar"}}]']],
++  [[000: empty
++001: {"error":null,"result":[{"uuid":["uuid","<0>"]}]}
++002: name=foo uuid=<0>
++003: {"error":null,"result":[{"uuid":["uuid","<1>"]},{"details":"transaction causes \"singleton\" table to contain 2 rows, greater than the schema-defined limit of 1 row(s)","error":"constraint violation"}]}
++004: {"error":null,"result":[{"count":1},{"uuid":["uuid","<2>"]}]}
++005: name=bar uuid=<2>
++006: done
++]])
++
+ OVSDB_CHECK_IDL_PY([external-linking idl, insert ops],
+   [],
+   [['linktest']],
+@@ -786,6 +812,7 @@ AT_CHECK([sort stdout | uuidfilt], [0],
+ # Check that ovsdb-idl figured out that table link2 and column l2 are missing.
+ AT_CHECK([grep ovsdb_idl stderr | sort], [0], [dnl
+ test-ovsdb|ovsdb_idl|idltest database lacks link2 table (database needs upgrade?)
++test-ovsdb|ovsdb_idl|idltest database lacks singleton table (database needs upgrade?)
+ test-ovsdb|ovsdb_idl|link1 table in idltest database lacks l2 column (database needs upgrade?)
+ ])
+ 
+diff --git a/tests/test-ovsdb.c b/tests/test-ovsdb.c
+index 6b2cde863..f9d2b2383 100644
+--- a/tests/test-ovsdb.c
++++ b/tests/test-ovsdb.c
+@@ -1904,6 +1904,26 @@ print_idl_row_updated_link2(const struct idltest_link2 *l2, int step)
+     }
+ }
+ 
++static void
++print_idl_row_updated_singleton(const struct idltest_singleton *sng, int step)
++{
++    size_t i;
++    bool updated = false;
++
++    for (i = 0; i < IDLTEST_SINGLETON_N_COLUMNS; i++) {
++        if (idltest_singleton_is_updated(sng, i)) {
++            if (!updated) {
++                printf("%03d: updated columns:", step);
++                updated = true;
++            }
++            printf(" %s", idltest_singleton_columns[i].name);
++        }
++    }
++    if (updated) {
++        printf("\n");
++    }
++}
++
+ static void
+ print_idl_row_simple(const struct idltest_simple *s, int step)
+ {
+@@ -1971,12 +1991,21 @@ print_idl_row_link2(const struct idltest_link2 *l2, int step)
+     print_idl_row_updated_link2(l2, step);
+ }
+ 
++static void
++print_idl_row_singleton(const struct idltest_singleton *sng, int step)
++{
++    printf("%03d: name=%s", step, sng->name);
++    printf(" uuid="UUID_FMT"\n", UUID_ARGS(&sng->header_.uuid));
++    print_idl_row_updated_singleton(sng, step);
++}
++
+ static void
+ print_idl(struct ovsdb_idl *idl, int step)
+ {
+     const struct idltest_simple *s;
+     const struct idltest_link1 *l1;
+     const struct idltest_link2 *l2;
++    const struct idltest_singleton *sng;
+     int n = 0;
+ 
+     IDLTEST_SIMPLE_FOR_EACH (s, idl) {
+@@ -1991,6 +2020,10 @@ print_idl(struct ovsdb_idl *idl, int step)
+         print_idl_row_link2(l2, step);
+         n++;
+     }
++    IDLTEST_SINGLETON_FOR_EACH (sng, idl) {
++        print_idl_row_singleton(sng, step);
++        n++;
++    }
+     if (!n) {
+         printf("%03d: empty\n", step);
+     }
+diff --git a/tests/test-ovsdb.py b/tests/test-ovsdb.py
+index fc42a2d68..03b9da374 100644
+--- a/tests/test-ovsdb.py
++++ b/tests/test-ovsdb.py
+@@ -240,6 +240,16 @@ def print_idl(idl, step):
+             print(''.join(s))
+             n += 1
+ 
++    if "singleton" in idl.tables:
++        sng = idl.tables["singleton"].rows
++        for row in six.itervalues(sng):
++            s = ["%03d:" % step]
++            s.append(" name=%s" % row.name)
++            if hasattr(row, "uuid"):
++                s.append(" uuid=%s" % row.uuid)
++            print(''.join(s))
++            n += 1
++
+     if not n:
+         print("%03d: empty" % step)
+     sys.stdout.flush()
+-- 
+2.17.1
+

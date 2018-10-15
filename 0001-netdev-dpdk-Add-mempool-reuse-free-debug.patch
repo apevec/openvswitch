@@ -1,0 +1,35 @@
+From a7fb0a4ee109e7ca4a56b506b52ce35ef0025d00 Mon Sep 17 00:00:00 2001
+From: Kevin Traynor <ktraynor@redhat.com>
+Date: Fri, 13 Apr 2018 18:25:09 +0100
+Subject: [PATCH] netdev-dpdk: Add mempool reuse/free debug.
+
+There is debug when a new mempool is created, but not
+when it is reused or freed. Add these as it is very
+difficult to debug mempool issues from logs without
+them.
+
+Signed-off-by: Kevin Traynor <ktraynor@redhat.com>
+Signed-off-by: Ian Stokes <ian.stokes@intel.com>
+---
+ lib/netdev-dpdk.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/lib/netdev-dpdk.c b/lib/netdev-dpdk.c
+index c9eec1b..476feba 100644
+--- a/lib/netdev-dpdk.c
++++ b/lib/netdev-dpdk.c
+@@ -617,4 +617,5 @@ dpdk_mp_sweep(void) OVS_REQUIRES(dpdk_mp_mutex)
+     LIST_FOR_EACH_SAFE (dmp, next, list_node, &dpdk_mp_list) {
+         if (!dmp->refcount && dpdk_mp_full(dmp->mp)) {
++            VLOG_DBG("Freeing mempool \"%s\"", dmp->mp->name);
+             ovs_list_remove(&dmp->list_node);
+             rte_mempool_free(dmp->mp);
+@@ -633,4 +634,5 @@ dpdk_mp_get(int socket_id, int mtu)
+     LIST_FOR_EACH (dmp, list_node, &dpdk_mp_list) {
+         if (dmp->socket_id == socket_id && dmp->mtu == mtu) {
++            VLOG_DBG("Reusing mempool \"%s\"", dmp->mp->name);
+             dmp->refcount++;
+             reuse = true;
+-- 
+1.8.3.1
+

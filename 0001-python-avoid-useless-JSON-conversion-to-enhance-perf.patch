@@ -1,0 +1,69 @@
+From eab138764e3aaa9f98a725a4636dd30e2a41a896 Mon Sep 17 00:00:00 2001
+From: Daniel Alvarez <dalvarez@redhat.com>
+Date: Wed, 28 Feb 2018 10:11:09 +0100
+Subject: [PATCH] python: avoid useless JSON conversion to enhance performance
+
+This patch removes a useless conversion to/from JSON in the
+processing of any 'modify' operations inside the process_update2
+method in Python IDL implementation.
+
+Previous code will make resources creation take longer as the number
+of elements in the row grows because of that JSON conversion. This
+patch eliminates it and now the time remains consant regardless
+of the database contents improving performance and scaling.
+
+Reported-by: Daniel Alvarez <dalvarez@redhat.com>
+Reported-at: https://mail.openvswitch.org/pipermail/ovs-discuss/2018-February/046263.html
+Signed-off-by: Daniel Alvarez <dalvarez@redhat.com>
+Acked-by: Terry Wilson <twilson@redhat.com>
+Tested-By: Terry Wilson <twilson@redhat.com>
+Acked-by: Han Zhou <hzhou8@ebay.com>
+Signed-off-by: Ben Pfaff <blp@ovn.org>
+---
+ python/ovs/db/idl.py | 12 +++++-------
+ 1 file changed, 5 insertions(+), 7 deletions(-)
+
+diff --git a/python/ovs/db/idl.py b/python/ovs/db/idl.py
+index 60548bcf5..5a4d129c0 100644
+--- a/python/ovs/db/idl.py
++++ b/python/ovs/db/idl.py
+@@ -518,10 +518,8 @@ class Idl(object):
+             if not row:
+                 raise error.Error('Modify non-existing row')
+ 
+-            old_row_diff_json = self.__apply_diff(table, row,
+-                                                  row_update['modify'])
+-            self.notify(ROW_UPDATE, row,
+-                        Row.from_json(self, table, uuid, old_row_diff_json))
++            old_row = self.__apply_diff(table, row, row_update['modify'])
++            self.notify(ROW_UPDATE, row, Row(self, table, uuid, old_row))
+             changed = True
+         else:
+             raise error.Error('<row-update> unknown operation',
+@@ -584,7 +582,7 @@ class Idl(object):
+                         row_update[column.name] = self.__column_name(column)
+ 
+     def __apply_diff(self, table, row, row_diff):
+-        old_row_diff_json = {}
++        old_row = {}
+         for column_name, datum_diff_json in six.iteritems(row_diff):
+             column = table.columns.get(column_name)
+             if not column:
+@@ -601,12 +599,12 @@ class Idl(object):
+                           % (column_name, table.name, e))
+                 continue
+ 
+-            old_row_diff_json[column_name] = row._data[column_name].to_json()
++            old_row[column_name] = row._data[column_name].copy()
+             datum = row._data[column_name].diff(datum_diff)
+             if datum != row._data[column_name]:
+                 row._data[column_name] = datum
+ 
+-        return old_row_diff_json
++        return old_row
+ 
+     def __row_update(self, table, row, row_json):
+         changed = False
+-- 
+2.14.3
+

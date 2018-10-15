@@ -1,0 +1,72 @@
+From 96935c61631fe2095246b5dce5c6fea960e34c87 Mon Sep 17 00:00:00 2001
+From: Maxime Coquelin <maxime.coquelin@redhat.com>
+Date: Thu, 16 Aug 2018 19:29:22 +0200
+Subject: [PATCH] vhost: retranslate vring addr when memory table changes
+
+[ backported from upstream commit d5022533c20aed365d513663806a999459037015 ]
+
+When the vhost-user master sends memory updates using
+VHOST_USER_SET_MEM request, the user backends unmap and then
+mmap again the memory regions in its address space.
+
+If the ring addresses have already been translated, it needs to
+be translated again as they point to unmapped memory.
+
+Signed-off-by: Maxime Coquelin <maxime.coquelin@redhat.com>
+---
+ lib/librte_vhost/vhost_user.c | 24 ++++++++++++++++++++++--
+ 1 file changed, 22 insertions(+), 2 deletions(-)
+
+diff --git a/dpdk-17.11/lib/librte_vhost/vhost_user.c b/dpdk-17.11/lib/librte_vhost/vhost_user.c
+index 07c848c7c..0eb5e0d65 100644
+--- a/dpdk-17.11/lib/librte_vhost/vhost_user.c
++++ b/dpdk-17.11/lib/librte_vhost/vhost_user.c
+@@ -622,8 +622,9 @@ dump_guest_pages(struct virtio_net *dev)
+ #endif
+ 
+ static int
+-vhost_user_set_mem_table(struct virtio_net *dev, struct VhostUserMsg *pmsg)
++vhost_user_set_mem_table(struct virtio_net **pdev, struct VhostUserMsg *pmsg)
+ {
++	struct virtio_net *dev = *pdev;
+ 	struct VhostUserMemory memory = pmsg->payload.memory;
+ 	struct rte_vhost_mem_region *reg;
+ 	void *mmap_addr;
+@@ -732,6 +733,25 @@ vhost_user_set_mem_table(struct virtio_n
+ 			mmap_offset);
+ 	}
+ 
++	for (i = 0; i < dev->nr_vring; i++) {
++		struct vhost_virtqueue *vq = dev->virtqueue[i];
++
++		if (vq->desc || vq->avail || vq->used) {
++			/*
++			 * If the memory table got updated, the ring addresses
++			 * need to be translated again as virtual addresses have
++			 * changed.
++			 */
++			vring_invalidate(dev, vq);
++
++			dev = translate_ring_addresses(dev, i);
++			if (!dev)
++				return -1;
++
++			*pdev = dev;
++		}
++	}
++
+ 	dump_guest_pages(dev);
+ 
+ 	return 0;
+@@ -1390,7 +1410,7 @@ vhost_user_msg_handler(int vid, int fd)
+ 		break;
+ 
+ 	case VHOST_USER_SET_MEM_TABLE:
+-		ret = vhost_user_set_mem_table(dev, &msg);
++		ret = vhost_user_set_mem_table(&dev, &msg);
+ 		break;
+ 
+ 	case VHOST_USER_SET_LOG_BASE:
+-- 
+2.17.1
+

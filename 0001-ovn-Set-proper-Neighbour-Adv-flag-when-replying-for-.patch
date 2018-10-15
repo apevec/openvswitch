@@ -1,0 +1,317 @@
+From d5176edf567470749b3270f46dee3c562dd386f8 Mon Sep 17 00:00:00 2001
+From: Numan Siddique <nusiddiq@redhat.com>
+Date: Mon, 14 May 2018 23:20:32 +0530
+Subject: [PATCH] ovn: Set proper Neighbour Adv flag when replying for NS
+ request for router IP
+
+Presently when a VM's IPv6 stack sends a Neighbor Solicitation request for its
+router IP, (mostly when the ND cache entry for the router is in STALE state)
+ovn-controller responds with a Neighbor Adv packet (using the action nd_na).
+But it doesn't set 'ND_RSO_ROUTER' in the RSO flags (please see RFC4861 page 23).
+Because of which, the VM deletes the default route. The default route gets added
+again when the next RA is received (but would again gets deleted if its sends
+NS request). And this results in disruption of IPv6 traffic.
+
+This patch addresses this issue by adding a new action 'nd_na_router' which is
+same as 'nd_na' but it sets the 'ND_RSO_ROUTER' in the RSO flags. ovn-northd
+uses this action. A new action is added instead of modifying the existing 'nd_na'
+action. This is because
+  - We cannot set the RSO flags in the "nd_na { ..actions .. }"
+  - It would be ugly to have something like nd_na { router_flags, ...actions .. }
+
+Reported-at: https://bugzilla.redhat.com/show_bug.cgi?id=1567735
+Signed-off-by: Numan Siddique <nusiddiq@redhat.com>
+Acked-by: Mark Michelson <mmichels@redhat.com>
+
+(cherry-picked from c9756229ed818e4c354d8bfd7c65c656f92fc98b and resolved conflicts)
+
+Signed-off-by: Ben Pfaff <blp@ovn.org>
+---
+ include/ovn/actions.h       |  7 +++++++
+ ovn/controller/pinctrl.c    | 23 +++++++++++++--------
+ ovn/lib/actions.c           | 23 +++++++++++++++++++++
+ ovn/northd/ovn-northd.8.xml | 34 ++++++++++++++++++++++++++----
+ ovn/northd/ovn-northd.c     |  2 +-
+ ovn/ovn-sb.xml              | 41 +++++++++++++++++++++++++++++++++++++
+ ovn/utilities/ovn-trace.c   |  1 +
+ tests/ovn.at                |  5 +++++
+ 8 files changed, 123 insertions(+), 13 deletions(-)
+
+diff --git a/include/ovn/actions.h b/include/ovn/actions.h
+index d2a79383f..c3251275b 100644
+--- a/include/ovn/actions.h
++++ b/include/ovn/actions.h
+@@ -65,6 +65,7 @@ struct ovn_extend_table;
+     OVNACT(CLONE,             ovnact_nest)            \
+     OVNACT(ARP,               ovnact_nest)            \
+     OVNACT(ND_NA,             ovnact_nest)            \
++    OVNACT(ND_NA_ROUTER,      ovnact_nest)            \
+     OVNACT(GET_ARP,           ovnact_get_mac_bind)    \
+     OVNACT(PUT_ARP,           ovnact_put_mac_bind)    \
+     OVNACT(GET_ND,            ovnact_get_mac_bind)    \
+@@ -429,6 +430,12 @@ enum action_opcode {
+      * The actions, in OpenFlow 1.3 format, follow the action_header.
+      */
+     ACTION_OPCODE_ND_NS,
++
++    /* "nd_na_router { ...actions... }" with rso flag 'ND_RSO_ROUTER' set.
++        *
++        * The actions, in OpenFlow 1.3 format, follow the action_header.
++        */
++    ACTION_OPCODE_ND_NA_ROUTER,
+ };
+ 
+ /* Header. */
+diff --git a/ovn/controller/pinctrl.c b/ovn/controller/pinctrl.c
+index daf485173..f83b26601 100644
+--- a/ovn/controller/pinctrl.c
++++ b/ovn/controller/pinctrl.c
+@@ -79,7 +79,8 @@ static void send_garp_run(struct controller_ctx *ctx,
+                           struct sset *active_tunnels);
+ static void pinctrl_handle_nd_na(const struct flow *ip_flow,
+                                  const struct match *md,
+-                                 struct ofpbuf *userdata);
++                                 struct ofpbuf *userdata,
++                                 bool is_router);
+ static void reload_metadata(struct ofpbuf *ofpacts,
+                             const struct match *md);
+ static void pinctrl_handle_put_nd_ra_opts(
+@@ -1001,7 +1002,11 @@ process_packet_in(const struct ofp_header *msg, struct controller_ctx *ctx)
+         break;
+ 
+     case ACTION_OPCODE_ND_NA:
+-        pinctrl_handle_nd_na(&headers, &pin.flow_metadata, &userdata);
++        pinctrl_handle_nd_na(&headers, &pin.flow_metadata, &userdata, false);
++        break;
++
++    case ACTION_OPCODE_ND_NA_ROUTER:
++        pinctrl_handle_nd_na(&headers, &pin.flow_metadata, &userdata, true);
+         break;
+ 
+     case ACTION_OPCODE_PUT_ND:
+@@ -2145,7 +2150,7 @@ reload_metadata(struct ofpbuf *ofpacts, const struct match *md)
+ 
+ static void
+ pinctrl_handle_nd_na(const struct flow *ip_flow, const struct match *md,
+-                     struct ofpbuf *userdata)
++                     struct ofpbuf *userdata, bool is_router)
+ {
+     /* This action only works for IPv6 ND packets, and the switch should only
+      * send us ND packets this way, but check here just to be sure. */
+@@ -2159,13 +2164,15 @@ pinctrl_handle_nd_na(const struct flow *ip_flow, const struct match *md,
+     struct dp_packet packet;
+     dp_packet_use_stub(&packet, packet_stub, sizeof packet_stub);
+ 
+-    /* xxx These flags are not exactly correct.  Look at section 7.2.4
+-     * xxx of RFC 4861.  For example, we need to set ND_RSO_ROUTER for
+-     * xxx router's interfaces and ND_RSO_SOLICITED only if it was
+-     * xxx requested. */
++    /* These flags are not exactly correct.  Look at section 7.2.4
++     * of RFC 4861. */
++    uint32_t rso_flags = ND_RSO_SOLICITED | ND_RSO_OVERRIDE;
++    if (is_router) {
++        rso_flags |= ND_RSO_ROUTER;
++    }
+     compose_nd_na(&packet, ip_flow->dl_dst, ip_flow->dl_src,
+                   &ip_flow->nd_target, &ip_flow->ipv6_src,
+-                  htonl(ND_RSO_SOLICITED | ND_RSO_OVERRIDE));
++                  htonl(rso_flags));
+ 
+     /* Reload previous packet metadata and set actions from userdata. */
+     set_actions_and_enqueue_msg(&packet, md, userdata);
+diff --git a/ovn/lib/actions.c b/ovn/lib/actions.c
+index 218dc75f6..2e257ce85 100644
+--- a/ovn/lib/actions.c
++++ b/ovn/lib/actions.c
+@@ -1136,6 +1136,12 @@ parse_ND_NA(struct action_context *ctx)
+     parse_nested_action(ctx, OVNACT_ND_NA, "nd_ns");
+ }
+ 
++static void
++parse_ND_NA_ROUTER(struct action_context *ctx)
++{
++    parse_nested_action(ctx, OVNACT_ND_NA_ROUTER, "nd_ns");
++}
++
+ static void
+ parse_ND_NS(struct action_context *ctx)
+ {
+@@ -1169,6 +1175,12 @@ format_ND_NA(const struct ovnact_nest *nest, struct ds *s)
+     format_nested_action(nest, "nd_na", s);
+ }
+ 
++static void
++format_ND_NA_ROUTER(const struct ovnact_nest *nest, struct ds *s)
++{
++    format_nested_action(nest, "nd_na_router", s);
++}
++
+ static void
+ format_ND_NS(const struct ovnact_nest *nest, struct ds *s)
+ {
+@@ -1221,6 +1233,15 @@ encode_ND_NA(const struct ovnact_nest *on,
+     encode_nested_neighbor_actions(on, ep, ACTION_OPCODE_ND_NA, ofpacts);
+ }
+ 
++static void
++encode_ND_NA_ROUTER(const struct ovnact_nest *on,
++             const struct ovnact_encode_params *ep,
++             struct ofpbuf *ofpacts)
++{
++    encode_nested_neighbor_actions(on, ep, ACTION_OPCODE_ND_NA_ROUTER,
++                                   ofpacts);
++}
++
+ static void
+ encode_ND_NS(const struct ovnact_nest *on,
+              const struct ovnact_encode_params *ep,
+@@ -2238,6 +2259,8 @@ parse_action(struct action_context *ctx)
+         parse_ARP(ctx);
+     } else if (lexer_match_id(ctx->lexer, "nd_na")) {
+         parse_ND_NA(ctx);
++    } else if (lexer_match_id(ctx->lexer, "nd_na_router")) {
++        parse_ND_NA_ROUTER(ctx);
+     } else if (lexer_match_id(ctx->lexer, "nd_ns")) {
+         parse_ND_NS(ctx);
+     } else if (lexer_match_id(ctx->lexer, "get_arp")) {
+diff --git a/ovn/northd/ovn-northd.8.xml b/ovn/northd/ovn-northd.8.xml
+index bb34d66c3..0e0420ea6 100644
+--- a/ovn/northd/ovn-northd.8.xml
++++ b/ovn/northd/ovn-northd.8.xml
+@@ -1227,10 +1227,36 @@ arp.sha = <var>external_mac</var>;
+           Reply to IPv6 Neighbor Solicitations.  These flows reply to
+           Neighbor Solicitation requests for the router's own IPv6
+           address and load balancing IPv6 VIPs and populate the logical
+-          router's mac binding table. For each router port <var>P</var> that
+-          owns IPv6 address or has load balancing VIP <var>A</var>, solicited
+-          node address <var>S</var>, and Ethernet address <var>E</var>, a
+-          priority-90 flow matches <code>inport == <var>P</var> &amp;&amp;
++          router's mac binding table.
++        </p>
++
++        <p>
++          For each router port <var>P</var> that
++          owns IPv6 address <var>A</var>, solicited node address <var>S</var>,
++          and Ethernet address <var>E</var>, a priority-90 flow matches
++          <code>inport == <var>P</var> &amp;&amp;
++          nd_ns &amp;&amp; ip6.dst == {<var>A</var>, <var>E</var>} &amp;&amp;
++          nd.target == <var>A</var></code> with the following actions:
++        </p>
++
++        <pre>
++put_nd(inport, ip6.src, nd.sll);
++nd_na_router {
++    eth.src = <var>E</var>;
++    ip6.src = <var>A</var>;
++    nd.target = <var>A</var>;
++    nd.tll = <var>E</var>;
++    outport = inport;
++    flags.loopback = 1;
++    output;
++};
++        </pre>
++
++        <p>
++          For each router port <var>P</var> that has load balancing VIP
++          <var>A</var>, solicited node address <var>S</var>, and Ethernet
++          address <var>E</var>, a priority-90 flow matches
++          <code>inport == <var>P</var> &amp;&amp;
+           nd_ns &amp;&amp; ip6.dst == {<var>A</var>, <var>E</var>} &amp;&amp;
+           nd.target == <var>A</var></code> with the following actions:
+         </p>
+diff --git a/ovn/northd/ovn-northd.c b/ovn/northd/ovn-northd.c
+index 4bf77618e..5def6195d 100644
+--- a/ovn/northd/ovn-northd.c
++++ b/ovn/northd/ovn-northd.c
+@@ -5025,7 +5025,7 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
+             ds_clear(&actions);
+             ds_put_format(&actions,
+                           "put_nd(inport, ip6.src, nd.sll); "
+-                          "nd_na { "
++                          "nd_na_router { "
+                           "eth.src = %s; "
+                           "ip6.src = %s; "
+                           "nd.target = %s; "
+diff --git a/ovn/ovn-sb.xml b/ovn/ovn-sb.xml
+index 9f0ec5e87..7b9bc48b8 100644
+--- a/ovn/ovn-sb.xml
++++ b/ovn/ovn-sb.xml
+@@ -1328,6 +1328,47 @@
+           </p>
+         </dd>
+ 
++        <dt>
++          <code>nd_na_router { <var>action</var>; </code>...<code> };</code>
++        </dt>
++
++        <dd>
++          <p>
++            Temporarily replaces the IPv6 neighbor solicitation packet
++            being processed by an IPv6 neighbor advertisement (NA)
++            packet, sets ND_NSO_ROUTER in the RSO flags and executes each
++            nested <var>action</var> on the NA packet.  Actions following
++            the <code>nd_na_router</code> action, if any, apply to the
++            original, unmodified packet.
++          </p>
++
++          <p>
++            The NA packet that this action operates on is initialized based on
++            the IPv6 packet being processed, as follows. These are default
++            values that the nested actions will probably want to change:
++          </p>
++
++          <ul>
++            <li><code>eth.dst</code> exchanged with <code>eth.src</code></li>
++            <li><code>eth.type = 0x86dd</code></li>
++            <li><code>ip6.dst</code> copied from <code>ip6.src</code></li>
++            <li><code>ip6.src</code> copied from <code>nd.target</code></li>
++            <li><code>icmp6.type = 136</code> (Neighbor Advertisement)</li>
++            <li><code>nd.target</code> unchanged</li>
++            <li><code>nd.sll = 00:00:00:00:00:00</code></li>
++            <li><code>nd.tll</code> copied from <code>eth.dst</code></li>
++          </ul>
++
++          <p>
++            The ND packet has the same VLAN header, if any, as the IPv6 packet
++            it replaces.
++          </p>
++
++          <p>
++            <b>Prerequisite:</b> <code>nd_ns</code>
++          </p>
++        </dd>
++
+         <dt><code>get_nd(<var>P</var>, <var>A</var>);</code></dt>
+ 
+         <dd>
+diff --git a/ovn/utilities/ovn-trace.c b/ovn/utilities/ovn-trace.c
+index 06d4ddf8e..144a8e38d 100644
+--- a/ovn/utilities/ovn-trace.c
++++ b/ovn/utilities/ovn-trace.c
+@@ -1832,6 +1832,7 @@ trace_actions(const struct ovnact *ovnacts, size_t ovnacts_len,
+             break;
+ 
+         case OVNACT_ND_NA:
++        case OVNACT_ND_NA_ROUTER:
+             execute_nd_na(ovnact_get_ND_NA(a), dp, uflow, table_id, pipeline,
+                           super);
+             break;
+diff --git a/tests/ovn.at b/tests/ovn.at
+index 22c8bcf5c..e405f7ab4 100644
+--- a/tests/ovn.at
++++ b/tests/ovn.at
+@@ -1014,6 +1014,11 @@ nd_na { eth.src = 12:34:56:78:9a:bc; nd.tll = 12:34:56:78:9a:bc; outport = inpor
+     formats as nd_na { eth.src = 12:34:56:78:9a:bc; nd.tll = 12:34:56:78:9a:bc; outport = inport; inport = ""; output; };
+     encodes as controller(userdata=00.00.00.03.00.00.00.00.00.19.00.10.80.00.08.06.12.34.56.78.9a.bc.00.00.00.19.00.10.80.00.42.06.12.34.56.78.9a.bc.00.00.ff.ff.00.18.00.00.23.20.00.06.00.20.00.00.00.00.00.01.1c.04.00.01.1e.04.00.19.00.10.00.01.1c.04.00.00.00.00.00.00.00.00.ff.ff.00.10.00.00.23.20.00.0e.ff.f8.40.00.00.00)
+     has prereqs nd_ns
++# nd_na_router
++nd_na_router { eth.src = 12:34:56:78:9a:bc; nd.tll = 12:34:56:78:9a:bc; outport = inport; inport = ""; /* Allow sending out inport. */ output; };
++    formats as nd_na_router { eth.src = 12:34:56:78:9a:bc; nd.tll = 12:34:56:78:9a:bc; outport = inport; inport = ""; output; };
++    encodes as controller(userdata=00.00.00.0a.00.00.00.00.00.19.00.10.80.00.08.06.12.34.56.78.9a.bc.00.00.00.19.00.10.80.00.42.06.12.34.56.78.9a.bc.00.00.ff.ff.00.18.00.00.23.20.00.06.00.20.00.00.00.00.00.01.1c.04.00.01.1e.04.00.19.00.10.00.01.1c.04.00.00.00.00.00.00.00.00.ff.ff.00.10.00.00.23.20.00.0e.ff.f8.40.00.00.00)
++    has prereqs nd_ns
+ 
+ # get_nd
+ get_nd(outport, ip6.dst);
+-- 
+2.17.0
+

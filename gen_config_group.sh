@@ -123,7 +123,14 @@ do
     set_conf "${OUTDIR}" CONFIG_RTE_LIBRTE_I40E_PMD y
     case "${OVS_DPDK_CONF_MACH_ARCH[i]}" in
     x86_64)
+        set_conf "${OUTDIR}" CONFIG_RTE_LIBRTE_BNXT_PMD y
         set_conf "${OUTDIR}" CONFIG_RTE_LIBRTE_ENIC_PMD y
+        set_conf "${OUTDIR}" CONFIG_RTE_LIBRTE_MLX4_PMD y
+        set_conf "${OUTDIR}" CONFIG_RTE_LIBRTE_MLX4_DLOPEN_DEPS y
+        set_conf "${OUTDIR}" CONFIG_RTE_LIBRTE_MLX5_PMD y
+        set_conf "${OUTDIR}" CONFIG_RTE_LIBRTE_MLX5_DLOPEN_DEPS y
+        set_conf "${OUTDIR}" CONFIG_RTE_LIBRTE_NFP_PMD y
+        set_conf "${OUTDIR}" CONFIG_RTE_LIBRTE_QEDE_PMD y
         ;&
     arm64)
         set_conf "${OUTDIR}" CONFIG_RTE_LIBRTE_IXGBE_PMD y

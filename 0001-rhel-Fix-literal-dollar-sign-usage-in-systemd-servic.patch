@@ -1,0 +1,54 @@
+From 149c33dce24501480e1dfbd37dd21cbb9518f6c5 Mon Sep 17 00:00:00 2001
+From: Timothy Redaelli <tredaelli@redhat.com>
+Date: Mon, 16 Apr 2018 16:53:51 +0200
+Subject: [PATCH] rhel: Fix literal dollar sign usage in systemd service files
+
+Currently (at least on RHEL 7.5) openvswitch fails to start (with DPDK
+enabled) as non-root, since chown fails and "/dev/hugepages" group is not
+changed.
+
+Commit tested on Fedora 28 and RHEL 7.5, both as root as non-root user.
+
+From man 5 systemd.service:
+
+  To pass a literal dollar sign, use "$$". Variables whose value is not known
+  at expansion time are treated as empty strings. Note that the first argument
+  (i.e. the program to execute) may not be a variable.
+
+CC: Aaron Conole <aconole@redhat.com>
+Fixes: 4299145c1095 ("rhel: don't drop capabilities when running as root")
+Signed-off-by: Timothy Redaelli <tredaelli@redhat.com>
+---
+ rhel/usr_lib_systemd_system_ovs-vswitchd.service.in | 2 +-
+ rhel/usr_lib_systemd_system_ovsdb-server.service    | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/rhel/usr_lib_systemd_system_ovs-vswitchd.service.in b/rhel/usr_lib_systemd_system_ovs-vswitchd.service.in
+index 889740f1a..11b34c686 100644
+--- a/rhel/usr_lib_systemd_system_ovs-vswitchd.service.in
++++ b/rhel/usr_lib_systemd_system_ovs-vswitchd.service.in
+@@ -15,7 +15,7 @@ EnvironmentFile=/etc/openvswitch/default.conf
+ EnvironmentFile=-/etc/sysconfig/openvswitch
+ EnvironmentFile=-/run/openvswitch/useropts
+ @begin_dpdk@
+-ExecStartPre=-/bin/sh -c '/usr/bin/chown :${OVS_USER_ID##*:} /dev/hugepages'
++ExecStartPre=-/bin/sh -c '/usr/bin/chown :$${OVS_USER_ID##*:} /dev/hugepages'
+ ExecStartPre=-/usr/bin/chmod 0775 /dev/hugepages
+ @end_dpdk@
+ ExecStart=/usr/share/openvswitch/scripts/ovs-ctl \
+diff --git a/rhel/usr_lib_systemd_system_ovsdb-server.service b/rhel/usr_lib_systemd_system_ovsdb-server.service
+index e05742d87..0fa57a925 100644
+--- a/rhel/usr_lib_systemd_system_ovsdb-server.service
++++ b/rhel/usr_lib_systemd_system_ovsdb-server.service
+@@ -11,7 +11,7 @@ Restart=on-failure
+ EnvironmentFile=/etc/openvswitch/default.conf
+ EnvironmentFile=-/etc/sysconfig/openvswitch
+ ExecStartPre=/usr/bin/chown ${OVS_USER_ID} /var/run/openvswitch
+-ExecStartPre=/bin/sh -c 'rm -f /run/openvswitch/useropts; if [ "${OVS_USER_ID/:*/}" != "root" ]; then /usr/bin/echo "OVSUSER=--ovs-user=${OVS_USER_ID}" > /run/openvswitch/useropts; fi'
++ExecStartPre=/bin/sh -c 'rm -f /run/openvswitch/useropts; if [ "$${OVS_USER_ID/:*/}" != "root" ]; then /usr/bin/echo "OVSUSER=--ovs-user=${OVS_USER_ID}" > /run/openvswitch/useropts; fi'
+ EnvironmentFile=-/run/openvswitch/useropts
+ ExecStart=/usr/share/openvswitch/scripts/ovs-ctl \
+           --no-ovs-vswitchd --no-monitor --system-id=random \
+-- 
+2.14.3
+

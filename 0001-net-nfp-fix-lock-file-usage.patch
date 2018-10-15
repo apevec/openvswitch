@@ -1,0 +1,138 @@
+From 552ff0a9afc2d41685ed0295e6080df0c05382b4 Mon Sep 17 00:00:00 2001
+From: Alejandro Lucero <alejandro.lucero@netronome.com>
+Date: Wed, 23 May 2018 13:28:56 +0100
+Subject: [PATCH] net/nfp: fix lock file usage
+
+DPDK apps can be executed as non-root users but current NFP lock
+file for avoiding concurrent accesses to CPP interface is precluding
+this option or requires to modify system file permissions.
+
+When the NFP device is bound to VFIO, this driver does not allow this
+concurrent access, so the lock file is not required at all.
+
+OVS-DPDK as executed in RedHat distributions is the main NFP user
+needing this fix.
+
+Fixes: c7e9729da6b5 ("net/nfp: support CPP")
+
+Signed-off-by: Alejandro Lucero <alejandro.lucero@netronome.com>
+(cherry picked from commit 5f6ed2f4e0cb79580c0bedba2bd764a39923d7ec)
+---
+ drivers/net/nfp/nfp_net.c                  | 13 ++++++++++++-
+ drivers/net/nfp/nfpcore/nfp_cpp.h          |  5 ++++-
+ drivers/net/nfp/nfpcore/nfp_cpp_pcie_ops.c | 11 +++++++----
+ drivers/net/nfp/nfpcore/nfp_cppcore.c      |  7 ++++---
+ 4 files changed, 27 insertions(+), 9 deletions(-)
+
+diff --git a/dpdk-17.11/drivers/net/nfp/nfp_net.c b/dpdk-17.11/drivers/net/nfp/nfp_net.c
+index 559230ab6..71249572d 100644
+--- a/dpdk-17.11/drivers/net/nfp/nfp_net.c
++++ b/dpdk-17.11/drivers/net/nfp/nfp_net.c
+@@ -3146,7 +3146,18 @@ static int nfp_pf_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
+ 	if (!dev)
+ 		return ret;
+ 
+-	cpp = nfp_cpp_from_device_name(dev->device.name);
++	/*
++	 * When device bound to UIO, the device could be used, by mistake,
++	 * by two DPDK apps, and the UIO driver does not avoid it. This
++	 * could lead to a serious problem when configuring the NFP CPP
++	 * interface. Here we avoid this telling to the CPP init code to
++	 * use a lock file if UIO is being used.
++	 */
++	if (dev->kdrv == RTE_KDRV_VFIO)
++		cpp = nfp_cpp_from_device_name(dev->device.name, 0);
++	else
++		cpp = nfp_cpp_from_device_name(dev->device.name, 1);
++
+ 	if (!cpp) {
+ 		RTE_LOG(ERR, PMD, "A CPP handle can not be obtained");
+ 		ret = -EIO;
+diff --git a/dpdk-17.11/drivers/net/nfp/nfpcore/nfp_cpp.h b/dpdk-17.11/drivers/net/nfp/nfpcore/nfp_cpp.h
+index 7e862145c..de2ff84e9 100644
+--- a/dpdk-17.11/drivers/net/nfp/nfpcore/nfp_cpp.h
++++ b/dpdk-17.11/drivers/net/nfp/nfpcore/nfp_cpp.h
+@@ -31,6 +31,8 @@ struct nfp_cpp {
+ 	 * island XPB CSRs.
+ 	 */
+ 	uint32_t imb_cat_table[16];
++
++	int driver_lock_needed;
+ };
+ 
+ /*
+@@ -179,7 +181,8 @@ uint32_t __nfp_cpp_model_autodetect(struct nfp_cpp *cpp);
+  *
+  * @return NFP CPP handle, or NULL on failure (and set errno accordingly).
+  */
+-struct nfp_cpp *nfp_cpp_from_device_name(const char *devname);
++struct nfp_cpp *nfp_cpp_from_device_name(const char *devname,
++					 int driver_lock_needed);
+ 
+ /*
+  * Free a NFP CPP handle
+diff --git a/dpdk-17.11/drivers/net/nfp/nfpcore/nfp_cpp_pcie_ops.c b/dpdk-17.11/drivers/net/nfp/nfpcore/nfp_cpp_pcie_ops.c
+index ad6ce72fe..e46dbc7d7 100644
+--- a/dpdk-17.11/drivers/net/nfp/nfpcore/nfp_cpp_pcie_ops.c
++++ b/dpdk-17.11/drivers/net/nfp/nfpcore/nfp_cpp_pcie_ops.c
+@@ -848,9 +848,11 @@ nfp6000_init(struct nfp_cpp *cpp, const char *devname)
+ 	memset(desc->busdev, 0, BUSDEV_SZ);
+ 	strncpy(desc->busdev, devname, strlen(devname));
+ 
+-	ret = nfp_acquire_process_lock(desc);
+-	if (ret)
+-		return -1;
++	if (cpp->driver_lock_needed) {
++		ret = nfp_acquire_process_lock(desc);
++		if (ret)
++			return -1;
++	}
+ 
+ 	snprintf(tmp_str, sizeof(tmp_str), "%s/%s/driver", PCI_DEVICES,
+ 		 desc->busdev);
+@@ -910,7 +912,8 @@ nfp6000_free(struct nfp_cpp *cpp)
+ 		if (desc->bar[x - 1].iomem)
+ 			munmap(desc->bar[x - 1].iomem, 1 << (desc->barsz - 3));
+ 	}
+-	close(desc->lock);
++	if (cpp->driver_lock_needed)
++		close(desc->lock);
+ 	close(desc->device);
+ 	free(desc);
+ }
+diff --git a/dpdk-17.11/drivers/net/nfp/nfpcore/nfp_cppcore.c b/dpdk-17.11/drivers/net/nfp/nfpcore/nfp_cppcore.c
+index 94d4a0b6b..f61143f7e 100644
+--- a/dpdk-17.11/drivers/net/nfp/nfpcore/nfp_cppcore.c
++++ b/dpdk-17.11/drivers/net/nfp/nfpcore/nfp_cppcore.c
+@@ -542,7 +542,7 @@ nfp_xpb_readl(struct nfp_cpp *cpp, uint32_t xpb_addr, uint32_t *value)
+ }
+ 
+ static struct nfp_cpp *
+-nfp_cpp_alloc(const char *devname)
++nfp_cpp_alloc(const char *devname, int driver_lock_needed)
+ {
+ 	const struct nfp_cpp_operations *ops;
+ 	struct nfp_cpp *cpp;
+@@ -558,6 +558,7 @@ nfp_cpp_alloc(const char *devname)
+ 		return NULL;
+ 
+ 	cpp->op = ops;
++	cpp->driver_lock_needed = driver_lock_needed;
+ 
+ 	if (cpp->op->init) {
+ 		err = cpp->op->init(cpp, devname);
+@@ -603,9 +604,9 @@ nfp_cpp_free(struct nfp_cpp *cpp)
+ }
+ 
+ struct nfp_cpp *
+-nfp_cpp_from_device_name(const char *devname)
++nfp_cpp_from_device_name(const char *devname, int driver_lock_needed)
+ {
+-	return nfp_cpp_alloc(devname);
++	return nfp_cpp_alloc(devname, driver_lock_needed);
+ }
+ 
+ /*
+-- 
+2.17.0
+

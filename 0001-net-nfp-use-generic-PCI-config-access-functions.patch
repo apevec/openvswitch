@@ -1,0 +1,337 @@
+From b419d9b1803882a15cf1448448720daaf568f21b Mon Sep 17 00:00:00 2001
+Message-Id: <b419d9b1803882a15cf1448448720daaf568f21b.1529915559.git.tredaelli@redhat.com>
+From: Alejandro Lucero <alejandro.lucero@netronome.com>
+Date: Mon, 18 Jun 2018 21:06:12 +0100
+Subject: [PATCH] net/nfp: use generic PCI config access functions
+
+This patch avoids direct access to device config sysfs file using
+rte_pci_read_config instead.
+
+Apart from replicating code, it turns out this direct access does
+not always work if non-root users execute DPDK apps. In those cases
+it is mandatory to go through VFIO specific function for reading pci
+config space.
+
+Signed-off-by: Alejandro Lucero <alejandro.lucero@netronome.com>
+(cherry picked from commit caab11ea33f02d9a0869890b48e371f928090279)
+---
+ drivers/net/nfp/nfp_net.c                  |   4 +-
+ drivers/net/nfp/nfpcore/nfp_cpp.h          |   6 +-
+ drivers/net/nfp/nfpcore/nfp_cpp_pcie_ops.c | 111 +++++++--------------
+ drivers/net/nfp/nfpcore/nfp_cppcore.c      |   9 +-
+ 4 files changed, 47 insertions(+), 83 deletions(-)
+
+diff --git a/dpdk-17.11/drivers/net/nfp/nfp_net.c b/dpdk-17.11/drivers/net/nfp/nfp_net.c
+index 71249572d..62db54d8b 100644
+--- a/dpdk-17.11/drivers/net/nfp/nfp_net.c
++++ b/dpdk-17.11/drivers/net/nfp/nfp_net.c
+@@ -3154,9 +3154,9 @@ static int nfp_pf_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
+ 	 * use a lock file if UIO is being used.
+ 	 */
+ 	if (dev->kdrv == RTE_KDRV_VFIO)
+-		cpp = nfp_cpp_from_device_name(dev->device.name, 0);
++		cpp = nfp_cpp_from_device_name(dev, 0);
+ 	else
+-		cpp = nfp_cpp_from_device_name(dev->device.name, 1);
++		cpp = nfp_cpp_from_device_name(dev, 1);
+ 
+ 	if (!cpp) {
+ 		RTE_LOG(ERR, PMD, "A CPP handle can not be obtained");
+diff --git a/dpdk-17.11/drivers/net/nfp/nfpcore/nfp_cpp.h b/dpdk-17.11/drivers/net/nfp/nfpcore/nfp_cpp.h
+index de2ff84e9..1427954c1 100644
+--- a/dpdk-17.11/drivers/net/nfp/nfpcore/nfp_cpp.h
++++ b/dpdk-17.11/drivers/net/nfp/nfpcore/nfp_cpp.h
+@@ -6,6 +6,8 @@
+ #ifndef __NFP_CPP_H__
+ #define __NFP_CPP_H__
+ 
++#include <rte_ethdev_pci.h>
++
+ #include "nfp-common/nfp_platform.h"
+ #include "nfp-common/nfp_resid.h"
+ 
+@@ -54,7 +56,7 @@ struct nfp_cpp_operations {
+ 	size_t area_priv_size;
+ 
+ 	/* Instance an NFP CPP */
+-	int (*init)(struct nfp_cpp *cpp, const char *devname);
++	int (*init)(struct nfp_cpp *cpp, struct rte_pci_device *dev);
+ 
+ 	/*
+ 	 * Free the bus.
+@@ -181,7 +183,7 @@ uint32_t __nfp_cpp_model_autodetect(struct nfp_cpp *cpp);
+  *
+  * @return NFP CPP handle, or NULL on failure (and set errno accordingly).
+  */
+-struct nfp_cpp *nfp_cpp_from_device_name(const char *devname,
++struct nfp_cpp *nfp_cpp_from_device_name(struct rte_pci_device *dev,
+ 					 int driver_lock_needed);
+ 
+ /*
+diff --git a/dpdk-17.11/drivers/net/nfp/nfpcore/nfp_cpp_pcie_ops.c b/dpdk-17.11/drivers/net/nfp/nfpcore/nfp_cpp_pcie_ops.c
+index e46dbc7d7..7d132baa9 100644
+--- a/dpdk-17.11/drivers/net/nfp/nfpcore/nfp_cpp_pcie_ops.c
++++ b/dpdk-17.11/drivers/net/nfp/nfpcore/nfp_cpp_pcie_ops.c
+@@ -32,6 +32,7 @@
+ #include <sys/file.h>
+ #include <sys/stat.h>
+ 
++#include <rte_ethdev_pci.h>
+ #include "nfp_cpp.h"
+ #include "nfp_target.h"
+ #include "nfp6000/nfp6000.h"
+@@ -638,61 +639,32 @@ nfp_acquire_process_lock(struct nfp_pcie_user *desc)
+ }
+ 
+ static int
+-nfp6000_set_model(struct nfp_pcie_user *desc, struct nfp_cpp *cpp)
++nfp6000_set_model(struct rte_pci_device *dev, struct nfp_cpp *cpp)
+ {
+-	char tmp_str[80];
+-	uint32_t tmp;
+-	int fp;
+-
+-	snprintf(tmp_str, sizeof(tmp_str), "%s/%s/config", PCI_DEVICES,
+-		 desc->busdev);
+-
+-	fp = open(tmp_str, O_RDONLY);
+-	if (!fp)
+-		return -1;
+-
+-	lseek(fp, 0x2e, SEEK_SET);
++	uint32_t model;
+ 
+-	if (read(fp, &tmp, sizeof(tmp)) != sizeof(tmp)) {
+-		printf("Error reading config file for model\n");
++	if (rte_pci_read_config(dev, &model, 4, 0x2e) < 0) {
++		printf("nfp set model failed\n");
+ 		return -1;
+ 	}
+ 
+-	tmp = tmp << 16;
+-
+-	if (close(fp) == -1)
+-		return -1;
+-
+-	nfp_cpp_model_set(cpp, tmp);
++	model  = model << 16;
++	nfp_cpp_model_set(cpp, model);
+ 
+ 	return 0;
+ }
+ 
+ static int
+-nfp6000_set_interface(struct nfp_pcie_user *desc, struct nfp_cpp *cpp)
++nfp6000_set_interface(struct rte_pci_device *dev, struct nfp_cpp *cpp)
+ {
+-	char tmp_str[80];
+-	uint16_t tmp;
+-	int fp;
+-
+-	snprintf(tmp_str, sizeof(tmp_str), "%s/%s/config", PCI_DEVICES,
+-		 desc->busdev);
++	uint16_t interface;
+ 
+-	fp = open(tmp_str, O_RDONLY);
+-	if (!fp)
+-		return -1;
+-
+-	lseek(fp, 0x154, SEEK_SET);
+-
+-	if (read(fp, &tmp, sizeof(tmp)) != sizeof(tmp)) {
+-		printf("error reading config file for interface\n");
++	if (rte_pci_read_config(dev, &interface, 2, 0x154) < 0) {
++		printf("nfp set interface failed\n");
+ 		return -1;
+ 	}
+ 
+-	if (close(fp) == -1)
+-		return -1;
+-
+-	nfp_cpp_interface_set(cpp, tmp);
++	nfp_cpp_interface_set(cpp, interface);
+ 
+ 	return 0;
+ }
+@@ -703,7 +675,7 @@ nfp6000_set_interface(struct nfp_pcie_user *desc, struct nfp_cpp *cpp)
+ #define PCI_EXT_CAP_NEXT(header)	((header >> 20) & 0xffc)
+ #define PCI_EXT_CAP_ID_DSN	0x03
+ static int
+-nfp_pci_find_next_ext_capability(int fp, int cap)
++nfp_pci_find_next_ext_capability(struct rte_pci_device *dev, int cap)
+ {
+ 	uint32_t header;
+ 	int ttl;
+@@ -712,9 +684,8 @@ nfp_pci_find_next_ext_capability(int fp, int cap)
+ 	/* minimum 8 bytes per capability */
+ 	ttl = (PCI_CFG_SPACE_EXP_SIZE - PCI_CFG_SPACE_SIZE) / 8;
+ 
+-	lseek(fp, pos, SEEK_SET);
+-	if (read(fp, &header, sizeof(header)) != sizeof(header)) {
+-		printf("error reading config file for serial\n");
++	if (rte_pci_read_config(dev, &header, 4, pos) < 0) {
++		printf("nfp error reading extended capabilities\n");
+ 		return -1;
+ 	}
+ 
+@@ -733,9 +704,8 @@ nfp_pci_find_next_ext_capability(int fp, int cap)
+ 		if (pos < PCI_CFG_SPACE_SIZE)
+ 			break;
+ 
+-		lseek(fp, pos, SEEK_SET);
+-		if (read(fp, &header, sizeof(header)) != sizeof(header)) {
+-			printf("error reading config file for serial\n");
++		if (rte_pci_read_config(dev, &header, 4, pos) < 0) {
++			printf("nfp error reading extended capabilities\n");
+ 			return -1;
+ 		}
+ 	}
+@@ -744,56 +714,47 @@ nfp_pci_find_next_ext_capability(int fp, int cap)
+ }
+ 
+ static int
+-nfp6000_set_serial(struct nfp_pcie_user *desc, struct nfp_cpp *cpp)
++nfp6000_set_serial(struct rte_pci_device *dev, struct nfp_cpp *cpp)
+ {
+-	char tmp_str[80];
+ 	uint16_t tmp;
+ 	uint8_t serial[6];
+ 	int serial_len = 6;
+-	int fp, pos;
++	int pos;
+ 
+-	snprintf(tmp_str, sizeof(tmp_str), "%s/%s/config", PCI_DEVICES,
+-		 desc->busdev);
+-
+-	fp = open(tmp_str, O_RDONLY);
+-	if (!fp)
+-		return -1;
+-
+-	pos = nfp_pci_find_next_ext_capability(fp, PCI_EXT_CAP_ID_DSN);
++	pos = nfp_pci_find_next_ext_capability(dev, PCI_EXT_CAP_ID_DSN);
+ 	if (pos <= 0) {
+-		printf("PCI_EXT_CAP_ID_DSN not found. Using default offset\n");
+-		lseek(fp, 0x156, SEEK_SET);
++		printf("PCI_EXT_CAP_ID_DSN not found. nfp set serial failed\n");
++		return -1;
+ 	} else {
+-		lseek(fp, pos + 6, SEEK_SET);
++		pos += 6;
+ 	}
+ 
+-	if (read(fp, &tmp, sizeof(tmp)) != sizeof(tmp)) {
+-		printf("error reading config file for serial\n");
++	if (rte_pci_read_config(dev, &tmp, 2, pos) < 0) {
++		printf("nfp set serial failed\n");
+ 		return -1;
+ 	}
+ 
+ 	serial[4] = (uint8_t)((tmp >> 8) & 0xff);
+ 	serial[5] = (uint8_t)(tmp & 0xff);
+ 
+-	if (read(fp, &tmp, sizeof(tmp)) != sizeof(tmp)) {
+-		printf("error reading config file for serial\n");
++	pos += 2;
++	if (rte_pci_read_config(dev, &tmp, 2, pos) < 0) {
++		printf("nfp set serial failed\n");
+ 		return -1;
+ 	}
+ 
+ 	serial[2] = (uint8_t)((tmp >> 8) & 0xff);
+ 	serial[3] = (uint8_t)(tmp & 0xff);
+ 
+-	if (read(fp, &tmp, sizeof(tmp)) != sizeof(tmp)) {
+-		printf("error reading config file for serial\n");
++	pos += 2;
++	if (rte_pci_read_config(dev, &tmp, 2, pos) < 0) {
++		printf("nfp set serial failed\n");
+ 		return -1;
+ 	}
+ 
+ 	serial[0] = (uint8_t)((tmp >> 8) & 0xff);
+ 	serial[1] = (uint8_t)(tmp & 0xff);
+ 
+-	if (close(fp) == -1)
+-		return -1;
+-
+ 	nfp_cpp_serial_set(cpp, serial, serial_len);
+ 
+ 	return 0;
+@@ -831,7 +792,7 @@ nfp6000_set_barsz(struct nfp_pcie_user *desc)
+ }
+ 
+ static int
+-nfp6000_init(struct nfp_cpp *cpp, const char *devname)
++nfp6000_init(struct nfp_cpp *cpp, struct rte_pci_device *dev)
+ {
+ 	char link[120];
+ 	char tmp_str[80];
+@@ -846,7 +807,7 @@ nfp6000_init(struct nfp_cpp *cpp, const char *devname)
+ 
+ 
+ 	memset(desc->busdev, 0, BUSDEV_SZ);
+-	strncpy(desc->busdev, devname, strlen(devname));
++	strncpy(desc->busdev, dev->device.name, sizeof(desc->busdev));
+ 
+ 	if (cpp->driver_lock_needed) {
+ 		ret = nfp_acquire_process_lock(desc);
+@@ -872,11 +833,11 @@ nfp6000_init(struct nfp_cpp *cpp, const char *devname)
+ 	if (desc->device == -1)
+ 		return -1;
+ 
+-	if (nfp6000_set_model(desc, cpp) < 0)
++	if (nfp6000_set_model(dev, cpp) < 0)
+ 		return -1;
+-	if (nfp6000_set_interface(desc, cpp) < 0)
++	if (nfp6000_set_interface(dev, cpp) < 0)
+ 		return -1;
+-	if (nfp6000_set_serial(desc, cpp) < 0)
++	if (nfp6000_set_serial(dev, cpp) < 0)
+ 		return -1;
+ 	if (nfp6000_set_barsz(desc) < 0)
+ 		return -1;
+diff --git a/dpdk-17.11/drivers/net/nfp/nfpcore/nfp_cppcore.c b/dpdk-17.11/drivers/net/nfp/nfpcore/nfp_cppcore.c
+index f61143f7e..75d3c9748 100644
+--- a/dpdk-17.11/drivers/net/nfp/nfpcore/nfp_cppcore.c
++++ b/dpdk-17.11/drivers/net/nfp/nfpcore/nfp_cppcore.c
+@@ -12,6 +12,7 @@
+ #include <sys/types.h>
+ 
+ #include <rte_byteorder.h>
++#include <rte_ethdev_pci.h>
+ 
+ #include "nfp_cpp.h"
+ #include "nfp_target.h"
+@@ -542,7 +543,7 @@ nfp_xpb_readl(struct nfp_cpp *cpp, uint32_t xpb_addr, uint32_t *value)
+ }
+ 
+ static struct nfp_cpp *
+-nfp_cpp_alloc(const char *devname, int driver_lock_needed)
++nfp_cpp_alloc(struct rte_pci_device *dev, int driver_lock_needed)
+ {
+ 	const struct nfp_cpp_operations *ops;
+ 	struct nfp_cpp *cpp;
+@@ -561,7 +562,7 @@ nfp_cpp_alloc(const char *devname, int driver_lock_needed)
+ 	cpp->driver_lock_needed = driver_lock_needed;
+ 
+ 	if (cpp->op->init) {
+-		err = cpp->op->init(cpp, devname);
++		err = cpp->op->init(cpp, dev);
+ 		if (err < 0) {
+ 			free(cpp);
+ 			return NULL;
+@@ -604,9 +605,9 @@ nfp_cpp_free(struct nfp_cpp *cpp)
+ }
+ 
+ struct nfp_cpp *
+-nfp_cpp_from_device_name(const char *devname, int driver_lock_needed)
++nfp_cpp_from_device_name(struct rte_pci_device *dev, int driver_lock_needed)
+ {
+-	return nfp_cpp_alloc(devname, driver_lock_needed);
++	return nfp_cpp_alloc(dev, driver_lock_needed);
+ }
+ 
+ /*
+-- 
+2.17.1
+

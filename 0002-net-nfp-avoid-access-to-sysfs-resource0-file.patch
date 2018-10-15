@@ -1,0 +1,116 @@
+From 7ecfd061afed55cbbd5c82802bc288ed67bf2cb3 Mon Sep 17 00:00:00 2001
+From: Alejandro Lucero <alejandro.lucero@netronome.com>
+Date: Tue, 26 Jun 2018 14:29:21 +0100
+Subject: [PATCH 2/2] net/nfp: avoid access to sysfs resource0 file
+
+NFP CPP interface dinamically configures NFP CPP BARs for accessing
+any NFP chip component from user space. This requires to map PCI BAR
+regions specifically. However, this does not require to do such map
+over the usual map done by VFIO or UIO drivers with the device PCI
+BARs.
+
+This patch avoids this remapping and therefore also avoids to access
+the device sysfs resource0 file for doing that remapping.
+
+Signed-off-by: Alejandro Lucero <alejandro.lucero@netronome.com>
+(cherry picked from commit a28fb7bef424d3b96ff13b996de7ed8775c67542)
+---
+ drivers/net/nfp/nfpcore/nfp_cpp_pcie_ops.c | 44 +---------------------
+ 1 file changed, 2 insertions(+), 42 deletions(-)
+
+diff --git a/dpdk-17.11/drivers/net/nfp/nfpcore/nfp_cpp_pcie_ops.c b/dpdk-17.11/drivers/net/nfp/nfpcore/nfp_cpp_pcie_ops.c
+index 9accc89cf..73124487a 100644
+--- a/dpdk-17.11/drivers/net/nfp/nfpcore/nfp_cpp_pcie_ops.c
++++ b/dpdk-17.11/drivers/net/nfp/nfpcore/nfp_cpp_pcie_ops.c
+@@ -309,13 +309,8 @@ nfp_enable_bars(struct nfp_pcie_user *nfp)
+ 		bar->csr = nfp->cfg +
+ 			   NFP_PCIE_CFG_BAR_PCIETOCPPEXPBAR(bar->index >> 3,
+ 							   bar->index & 7);
+-		bar->iomem =
+-		    (char *)mmap(0, 1 << bar->bitsize, PROT_READ | PROT_WRITE,
+-				 MAP_SHARED, nfp->device,
+-				 bar->index << bar->bitsize);
+ 
+-		if (bar->iomem == MAP_FAILED)
+-			return (-ENOMEM);
++		bar->iomem = nfp->cfg + (bar->index << bar->bitsize);
+ 	}
+ 	return 0;
+ }
+@@ -345,7 +340,6 @@ nfp_disable_bars(struct nfp_pcie_user *nfp)
+ 	for (x = ARRAY_SIZE(nfp->bar); x > 0; x--) {
+ 		bar = &nfp->bar[x - 1];
+ 		if (bar->iomem) {
+-			munmap(bar->iomem, 1 << (nfp->barsz - 3));
+ 			bar->iomem = NULL;
+ 			bar->lock = 0;
+ 		}
+@@ -778,9 +772,6 @@ nfp6000_set_barsz(struct rte_pci_device *dev, struct nfp_pcie_user *desc)
+ static int
+ nfp6000_init(struct nfp_cpp *cpp, struct rte_pci_device *dev)
+ {
+-	char link[120];
+-	char tmp_str[80];
+-	ssize_t size;
+ 	int ret = 0;
+ 	uint32_t model;
+ 	struct nfp_pcie_user *desc;
+@@ -799,24 +790,6 @@ nfp6000_init(struct nfp_cpp *cpp, struct rte_pci_device *dev)
+ 			return -1;
+ 	}
+ 
+-	snprintf(tmp_str, sizeof(tmp_str), "%s/%s/driver", PCI_DEVICES,
+-		 desc->busdev);
+-
+-	size = readlink(tmp_str, link, sizeof(link));
+-
+-	if (size == -1)
+-		tmp_str[0] = '\0';
+-
+-	if (size == sizeof(link))
+-		tmp_str[0] = '\0';
+-
+-	snprintf(tmp_str, sizeof(tmp_str), "%s/%s/resource0", PCI_DEVICES,
+-		 desc->busdev);
+-
+-	desc->device = open(tmp_str, O_RDWR);
+-	if (desc->device == -1)
+-		return -1;
+-
+ 	if (nfp6000_set_model(dev, cpp) < 0)
+ 		return -1;
+ 	if (nfp6000_set_interface(dev, cpp) < 0)
+@@ -826,12 +799,7 @@ nfp6000_init(struct nfp_cpp *cpp, struct rte_pci_device *dev)
+ 	if (nfp6000_set_barsz(dev, desc) < 0)
+ 		return -1;
+ 
+-	desc->cfg = (char *)mmap(0, 1 << (desc->barsz - 3),
+-				 PROT_READ | PROT_WRITE,
+-				 MAP_SHARED, desc->device, 0);
+-
+-	if (desc->cfg == MAP_FAILED)
+-		return -1;
++	desc->cfg = (char *)dev->mem_resource[0].addr;
+ 
+ 	nfp_enable_bars(desc);
+ 
+@@ -847,16 +815,8 @@ static void
+ nfp6000_free(struct nfp_cpp *cpp)
+ {
+ 	struct nfp_pcie_user *desc = nfp_cpp_priv(cpp);
+-	int x;
+ 
+-	/* Unmap may cause if there are any pending transaxctions */
+ 	nfp_disable_bars(desc);
+-	munmap(desc->cfg, 1 << (desc->barsz - 3));
+-
+-	for (x = ARRAY_SIZE(desc->bar); x > 0; x--) {
+-		if (desc->bar[x - 1].iomem)
+-			munmap(desc->bar[x - 1].iomem, 1 << (desc->barsz - 3));
+-	}
+ 	if (cpp->driver_lock_needed)
+ 		close(desc->lock);
+ 	close(desc->device);
+-- 
+2.17.1
+

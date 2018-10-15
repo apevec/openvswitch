@@ -1,0 +1,44 @@
+From e5c04b1d1bc83115a2cc28615a5d5c6645c66cd4 Mon Sep 17 00:00:00 2001
+Message-Id: <e5c04b1d1bc83115a2cc28615a5d5c6645c66cd4.1524241750.git.dcaratti@redhat.com>
+In-Reply-To: <02bd8182658600ebf2cbe61168e80c19ce4cdaa5.1524241750.git.dcaratti@redhat.com>
+References: <02bd8182658600ebf2cbe61168e80c19ce4cdaa5.1524241750.git.dcaratti@redhat.com>
+From: Ajit Khaparde <ajit.khaparde@broadcom.com>
+Date: Fri, 20 Apr 2018 07:22:02 -0700
+Subject: [PATCH 3/3] net/bnxt: fix mbuf data offset initialization
+
+Initialize mbuf->data_off to RTE_PKTMBUF_HEADROOM after allocation.
+Without this, it might be possible that the DMA address provided
+to the HW may not be in sync to what is indicated to the application
+in bnxt_rx_pkt.
+
+Fixes: 2eb53b134aae ("net/bnxt: add initial Rx code")
+Cc: stable@dpdk.org
+
+Signed-off-by: Ajit Khaparde <ajit.khaparde@broadcom.com>
+---
+ drivers/net/bnxt/bnxt_rxr.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+backport notes:
+ - use data->data_off instead off mbuf->data_off, because we miss
+   upstream commit 42b883535804 ("net/bnxt: use new API to get IOVA
+   address")
+
+--- a/dpdk-17.11/drivers/net/bnxt/bnxt_rxr.c
++++ b/dpdk-17.11/drivers/net/bnxt/bnxt_rxr.c
+@@ -74,6 +74,7 @@ static inline int bnxt_alloc_rx_data(str
+ 	}
+ 
+ 	rx_buf->mbuf = data;
++	data->data_off = RTE_PKTMBUF_HEADROOM;
+ 
+ 	rxbd->addr = rte_cpu_to_le_64(RTE_MBUF_DATA_DMA_ADDR(rx_buf->mbuf));
+ 
+@@ -101,6 +102,7 @@ static inline int bnxt_alloc_ag_data(str
+ 
+ 
+ 	rx_buf->mbuf = data;
++	data->data_off = RTE_PKTMBUF_HEADROOM;
+ 
+ 	rxbd->addr = rte_cpu_to_le_64(RTE_MBUF_DATA_DMA_ADDR(rx_buf->mbuf));
+ 

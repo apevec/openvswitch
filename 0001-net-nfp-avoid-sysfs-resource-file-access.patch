@@ -1,0 +1,69 @@
+From b742910272bb95daf42ab449c1077afa4aa79142 Mon Sep 17 00:00:00 2001
+From: Alejandro Lucero <alejandro.lucero@netronome.com>
+Date: Tue, 26 Jun 2018 14:25:40 +0100
+Subject: [PATCH 1/2] net/nfp: avoid sysfs resource file access
+
+Getting the bar size is required for NFP CPP interface configuration.
+However, this information can be obtained from the VFIO or UIO driver
+instead of accessing the sysfs resource file.
+
+Signed-off-by: Alejandro Lucero <alejandro.lucero@netronome.com>
+(cherry picked from commit e3cfaf02dcd88635ac614a1e1a8efe45d38ea4c9)
+---
+ drivers/net/nfp/nfpcore/nfp_cpp_pcie_ops.c | 28 +++++-----------------
+ 1 file changed, 6 insertions(+), 22 deletions(-)
+
+diff --git a/dpdk-17.11/drivers/net/nfp/nfpcore/nfp_cpp_pcie_ops.c b/dpdk-17.11/drivers/net/nfp/nfpcore/nfp_cpp_pcie_ops.c
+index 7d132baa9..9accc89cf 100644
+--- a/dpdk-17.11/drivers/net/nfp/nfpcore/nfp_cpp_pcie_ops.c
++++ b/dpdk-17.11/drivers/net/nfp/nfpcore/nfp_cpp_pcie_ops.c
+@@ -761,32 +761,16 @@ nfp6000_set_serial(struct rte_pci_device *dev, struct nfp_cpp *cpp)
+ }
+ 
+ static int
+-nfp6000_set_barsz(struct nfp_pcie_user *desc)
++nfp6000_set_barsz(struct rte_pci_device *dev, struct nfp_pcie_user *desc)
+ {
+-	char tmp_str[80];
+-	unsigned long start, end, flags, tmp;
+-	int i;
+-	FILE *fp;
+-
+-	snprintf(tmp_str, sizeof(tmp_str), "%s/%s/resource", PCI_DEVICES,
+-		 desc->busdev);
+-
+-	fp = fopen(tmp_str, "r");
+-	if (!fp)
+-		return -1;
++	unsigned long tmp;
++	int i = 0;
+ 
+-	if (fscanf(fp, "0x%lx 0x%lx 0x%lx", &start, &end, &flags) == 0) {
+-		printf("error reading resource file for bar size\n");
+-		return -1;
+-	}
++	tmp = dev->mem_resource[0].len;
+ 
+-	if (fclose(fp) == -1)
+-		return -1;
+-
+-	tmp = (end - start) + 1;
+-	i = 0;
+ 	while (tmp >>= 1)
+ 		i++;
++
+ 	desc->barsz = i;
+ 	return 0;
+ }
+@@ -839,7 +823,7 @@ nfp6000_init(struct nfp_cpp *cpp, struct rte_pci_device *dev)
+ 		return -1;
+ 	if (nfp6000_set_serial(dev, cpp) < 0)
+ 		return -1;
+-	if (nfp6000_set_barsz(desc) < 0)
++	if (nfp6000_set_barsz(dev, desc) < 0)
+ 		return -1;
+ 
+ 	desc->cfg = (char *)mmap(0, 1 << (desc->barsz - 3),
+-- 
+2.17.1
+

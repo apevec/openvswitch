@@ -1,0 +1,299 @@
+From 575ed8c576daebf38494aa3a10ef95ab806ea97a Mon Sep 17 00:00:00 2001
+From: Maxime Coquelin <maxime.coquelin@redhat.com>
+Date: Mon, 23 Apr 2018 11:33:39 +0200
+Subject: [PATCH 02/11] vhost: check all range is mapped when translating GPAs
+
+There is currently no check done on the length when translating
+guest addresses into host virtual addresses. Also, there is no
+guanrantee that the guest addresses range is contiguous in
+the host virtual address space.
+
+This patch prepares vhost_iova_to_vva() and its callers to
+return and check the mapped size. If the mapped size is smaller
+than the requested size, the caller handle it as an error.
+
+This issue has been assigned CVE-2018-1059.
+
+Reported-by: Yongji Xie <xieyongji@baidu.com>
+Signed-off-by: Maxime Coquelin <maxime.coquelin@redhat.com>
+---
+ lib/librte_vhost/vhost.c      | 39 +++++++++++++++-----------
+ lib/librte_vhost/vhost.h      |  6 ++--
+ lib/librte_vhost/virtio_net.c | 64 +++++++++++++++++++++++++++----------------
+ 3 files changed, 67 insertions(+), 42 deletions(-)
+
+diff --git a/dpdk-17.11/lib/librte_vhost/vhost.c b/dpdk-17.11/lib/librte_vhost/vhost.c
+index 51ea720..a8ed40b 100644
+--- a/dpdk-17.11/lib/librte_vhost/vhost.c
++++ b/dpdk-17.11/lib/librte_vhost/vhost.c
+@@ -59,15 +59,15 @@
+ uint64_t
+ __vhost_iova_to_vva(struct virtio_net *dev, struct vhost_virtqueue *vq,
+-		    uint64_t iova, uint64_t size, uint8_t perm)
++		    uint64_t iova, uint64_t *size, uint8_t perm)
+ {
+ 	uint64_t vva, tmp_size;
+ 
+-	if (unlikely(!size))
++	if (unlikely(!*size))
+ 		return 0;
+ 
+-	tmp_size = size;
++	tmp_size = *size;
+ 
+ 	vva = vhost_user_iotlb_cache_find(vq, iova, &tmp_size, perm);
+-	if (tmp_size == size)
++	if (tmp_size == *size)
+ 		return vva;
+ 
+@@ -159,30 +159,37 @@ struct virtio_net *
+ vring_translate(struct virtio_net *dev, struct vhost_virtqueue *vq)
+ {
+-	uint64_t size;
++	uint64_t req_size, size;
+ 
+ 	if (!(dev->features & (1ULL << VIRTIO_F_IOMMU_PLATFORM)))
+ 		goto out;
+ 
+-	size = sizeof(struct vring_desc) * vq->size;
++	req_size = sizeof(struct vring_desc) * vq->size;
++	size = req_size;
+ 	vq->desc = (struct vring_desc *)(uintptr_t)vhost_iova_to_vva(dev, vq,
+ 						vq->ring_addrs.desc_user_addr,
+-						size, VHOST_ACCESS_RW);
+-	if (!vq->desc)
++						&size, VHOST_ACCESS_RW);
++	if (!vq->desc || size != req_size)
+ 		return -1;
+ 
+-	size = sizeof(struct vring_avail);
+-	size += sizeof(uint16_t) * vq->size;
++	req_size = sizeof(struct vring_avail);
++	req_size += sizeof(uint16_t) * vq->size;
++	if (dev->features & (1ULL << VIRTIO_RING_F_EVENT_IDX))
++		req_size += sizeof(uint16_t);
++	size = req_size;
+ 	vq->avail = (struct vring_avail *)(uintptr_t)vhost_iova_to_vva(dev, vq,
+ 						vq->ring_addrs.avail_user_addr,
+-						size, VHOST_ACCESS_RW);
+-	if (!vq->avail)
++						&size, VHOST_ACCESS_RW);
++	if (!vq->avail || size != req_size)
+ 		return -1;
+ 
+-	size = sizeof(struct vring_used);
+-	size += sizeof(struct vring_used_elem) * vq->size;
++	req_size = sizeof(struct vring_used);
++	req_size += sizeof(struct vring_used_elem) * vq->size;
++	if (dev->features & (1ULL << VIRTIO_RING_F_EVENT_IDX))
++		req_size += sizeof(uint16_t);
++	size = req_size;
+ 	vq->used = (struct vring_used *)(uintptr_t)vhost_iova_to_vva(dev, vq,
+ 						vq->ring_addrs.used_user_addr,
+-						size, VHOST_ACCESS_RW);
+-	if (!vq->used)
++						&size, VHOST_ACCESS_RW);
++	if (!vq->used || size != req_size)
+ 		return -1;
+ 
+diff --git a/dpdk-17.11/lib/librte_vhost/vhost.h b/dpdk-17.11/lib/librte_vhost/vhost.h
+index c8f2a81..de300c1 100644
+--- a/dpdk-17.11/lib/librte_vhost/vhost.h
++++ b/dpdk-17.11/lib/librte_vhost/vhost.h
+@@ -382,5 +382,5 @@ struct virtio_net {
+ 
+ uint64_t __vhost_iova_to_vva(struct virtio_net *dev, struct vhost_virtqueue *vq,
+-			uint64_t iova, uint64_t size, uint8_t perm);
++			uint64_t iova, uint64_t *len, uint8_t perm);
+ int vring_translate(struct virtio_net *dev, struct vhost_virtqueue *vq);
+ void vring_invalidate(struct virtio_net *dev, struct vhost_virtqueue *vq);
+@@ -388,10 +388,10 @@ uint64_t __vhost_iova_to_vva(struct virtio_net *dev, struct vhost_virtqueue *vq,
+ static __rte_always_inline uint64_t
+ vhost_iova_to_vva(struct virtio_net *dev, struct vhost_virtqueue *vq,
+-			uint64_t iova, uint64_t size, uint8_t perm)
++			uint64_t iova, uint64_t *len, uint8_t perm)
+ {
+ 	if (!(dev->features & (1ULL << VIRTIO_F_IOMMU_PLATFORM)))
+ 		return rte_vhost_gpa_to_vva(dev->mem, iova);
+ 
+-	return __vhost_iova_to_vva(dev, vq, iova, size, perm);
++	return __vhost_iova_to_vva(dev, vq, iova, len, perm);
+ }
+ 
+diff --git a/dpdk-17.11/lib/librte_vhost/virtio_net.c b/dpdk-17.11/lib/librte_vhost/virtio_net.c
+index cb1d0cf..79bac59 100644
+--- a/dpdk-17.11/lib/librte_vhost/virtio_net.c
++++ b/dpdk-17.11/lib/librte_vhost/virtio_net.c
+@@ -205,4 +205,5 @@
+ 	uint32_t mbuf_avail, mbuf_offset;
+ 	uint32_t cpy_len;
++	uint64_t dlen;
+ 	struct vring_desc *desc;
+ 	uint64_t desc_addr;
+@@ -214,6 +215,7 @@
+ 
+ 	desc = &descs[desc_idx];
++	dlen = desc->len;
+ 	desc_addr = vhost_iova_to_vva(dev, vq, desc->addr,
+-					desc->len, VHOST_ACCESS_RW);
++					&dlen, VHOST_ACCESS_RW);
+ 	/*
+ 	 * Checking of 'desc_addr' placed outside of 'unlikely' macro to avoid
+@@ -221,5 +223,6 @@
+ 	 * otherwise stores offset on the stack instead of in a register.
+ 	 */
+-	if (unlikely(desc->len < dev->vhost_hlen) || !desc_addr) {
++	if (unlikely(dlen != desc->len || desc->len < dev->vhost_hlen) ||
++			!desc_addr) {
+ 		error = -1;
+ 		goto out;
+@@ -259,8 +262,9 @@
+ 
+ 			desc = &descs[desc->next];
++			dlen = desc->len;
+ 			desc_addr = vhost_iova_to_vva(dev, vq, desc->addr,
+-							desc->len,
++							&dlen,
+ 							VHOST_ACCESS_RW);
+-			if (unlikely(!desc_addr)) {
++			if (unlikely(!desc_addr || dlen != desc->len)) {
+ 				error = -1;
+ 				goto out;
+@@ -376,10 +380,11 @@
+ 
+ 		if (vq->desc[desc_idx].flags & VRING_DESC_F_INDIRECT) {
++			uint64_t dlen = vq->desc[desc_idx].len;
+ 			descs = (struct vring_desc *)(uintptr_t)
+ 				vhost_iova_to_vva(dev,
+ 						vq, vq->desc[desc_idx].addr,
+-						vq->desc[desc_idx].len,
+-						VHOST_ACCESS_RO);
+-			if (unlikely(!descs)) {
++						&dlen, VHOST_ACCESS_RO);
++			if (unlikely(!descs ||
++					dlen != vq->desc[desc_idx].len)) {
+ 				count = i;
+ 				break;
+@@ -439,4 +444,5 @@
+ 	uint32_t vec_id = *vec_idx;
+ 	uint32_t len    = 0;
++	uint64_t dlen;
+ 	struct vring_desc *descs = vq->desc;
+ 
+@@ -444,9 +450,10 @@
+ 
+ 	if (vq->desc[idx].flags & VRING_DESC_F_INDIRECT) {
++		dlen = vq->desc[idx].len;
+ 		descs = (struct vring_desc *)(uintptr_t)
+ 			vhost_iova_to_vva(dev, vq, vq->desc[idx].addr,
+-						vq->desc[idx].len,
++						&dlen,
+ 						VHOST_ACCESS_RO);
+-		if (unlikely(!descs))
++		if (unlikely(!descs || dlen != vq->desc[idx].len))
+ 			return -1;
+ 
+@@ -531,4 +538,5 @@
+ 	uint32_t desc_offset, desc_avail;
+ 	uint32_t cpy_len;
++	uint64_t dlen;
+ 	uint64_t hdr_addr, hdr_phys_addr;
+ 	struct rte_mbuf *hdr_mbuf;
+@@ -542,8 +550,10 @@
+ 	}
+ 
++	dlen = buf_vec[vec_idx].buf_len;
+ 	desc_addr = vhost_iova_to_vva(dev, vq, buf_vec[vec_idx].buf_addr,
+-						buf_vec[vec_idx].buf_len,
+-						VHOST_ACCESS_RW);
+-	if (buf_vec[vec_idx].buf_len < dev->vhost_hlen || !desc_addr) {
++						&dlen, VHOST_ACCESS_RW);
++	if (dlen != buf_vec[vec_idx].buf_len ||
++			buf_vec[vec_idx].buf_len < dev->vhost_hlen ||
++			!desc_addr) {
+ 		error = -1;
+ 		goto out;
+@@ -567,10 +577,12 @@
+ 		if (desc_avail == 0) {
+ 			vec_idx++;
++			dlen = buf_vec[vec_idx].buf_len;
+ 			desc_addr =
+ 				vhost_iova_to_vva(dev, vq,
+ 					buf_vec[vec_idx].buf_addr,
+-					buf_vec[vec_idx].buf_len,
++					&dlen,
+ 					VHOST_ACCESS_RW);
+-			if (unlikely(!desc_addr)) {
++			if (unlikely(!desc_addr ||
++					dlen != buf_vec[vec_idx].buf_len)) {
+ 				error = -1;
+ 				goto out;
+@@ -912,4 +924,5 @@
+ 	uint32_t mbuf_avail, mbuf_offset;
+ 	uint32_t cpy_len;
++	uint64_t dlen;
+ 	struct rte_mbuf *cur = m, *prev = m;
+ 	struct virtio_net_hdr *hdr = NULL;
+@@ -927,9 +940,10 @@
+ 	}
+ 
++	dlen = desc->len;
+ 	desc_addr = vhost_iova_to_vva(dev,
+ 					vq, desc->addr,
+-					desc->len,
++					&dlen,
+ 					VHOST_ACCESS_RO);
+-	if (unlikely(!desc_addr)) {
++	if (unlikely(!desc_addr || dlen != desc->len)) {
+ 		error = -1;
+ 		goto out;
+@@ -954,9 +968,10 @@
+ 		}
+ 
++		dlen = desc->len;
+ 		desc_addr = vhost_iova_to_vva(dev,
+ 							vq, desc->addr,
+-							desc->len,
++							&dlen,
+ 							VHOST_ACCESS_RO);
+-		if (unlikely(!desc_addr)) {
++		if (unlikely(!desc_addr || dlen != desc->len)) {
+ 			error = -1;
+ 			goto out;
+@@ -1042,9 +1057,9 @@
+ 			}
+ 
++			dlen = desc->len;
+ 			desc_addr = vhost_iova_to_vva(dev,
+ 							vq, desc->addr,
+-							desc->len,
+-							VHOST_ACCESS_RO);
+-			if (unlikely(!desc_addr)) {
++							&dlen, VHOST_ACCESS_RO);
++			if (unlikely(!desc_addr || dlen != desc->len)) {
+ 				error = -1;
+ 				goto out;
+@@ -1320,4 +1335,5 @@
+ 		struct vring_desc *desc;
+ 		uint16_t sz, idx;
++		uint64_t dlen;
+ 		int err;
+ 
+@@ -1326,10 +1342,12 @@
+ 
+ 		if (vq->desc[desc_indexes[i]].flags & VRING_DESC_F_INDIRECT) {
++			dlen = vq->desc[desc_indexes[i]].len;
+ 			desc = (struct vring_desc *)(uintptr_t)
+ 				vhost_iova_to_vva(dev, vq,
+ 						vq->desc[desc_indexes[i]].addr,
+-						vq->desc[desc_indexes[i]].len,
++						&dlen,
+ 						VHOST_ACCESS_RO);
+-			if (unlikely(!desc))
++			if (unlikely(!desc ||
++					dlen != vq->desc[desc_indexes[i]].len))
+ 				break;
+ 
+-- 
+1.8.3.1
+

@@ -1,0 +1,114 @@
+From 8d782f3f89e1dcd0c8af1c3c93501d7a06159d66 Mon Sep 17 00:00:00 2001
+From: Hyong Youb Kim <hyonkim@cisco.com>
+Date: Wed, 7 Mar 2018 18:46:58 -0800
+Subject: [PATCH] net/enic: allocate stats DMA buffer upfront during probe
+
+The driver provides a DMA buffer to the firmware when it requests port
+stats. The NIC then fills that buffer with latest stats. Currently,
+the driver allocates the DMA buffer the first time it requests stats
+and saves it for later use. This can lead to crashes when
+primary/secondary processes are involved. For example, the following
+sequence crashes the secondary process.
+
+1. Start a primary app that does not call rte_eth_stats_get()
+2. dpdk-procinfo -- --stats
+
+dpdk-procinfo crashes while trying to allocate the stats DMA buffer
+because the alloc function pointer (vdev.alloc_consistent) is valid
+only in the primary process, not in the secondary process.
+
+Overwriting the alloc function pointer in the secondary process is not
+an option, as it will simply make the pointer invalid in the primary
+process. Instead, allocate the DMA buffer during probe so that only
+the primary process does both allocate and free. This allows the
+secondary process to dump stats as well.
+
+Fixes: 9913fbb91df0 ("enic/base: common code")
+Cc: stable@dpdk.org
+
+Signed-off-by: Hyong Youb Kim <hyonkim@cisco.com>
+Reviewed-by: John Daley <johndale@cisco.com>
+---
+ drivers/net/enic/base/vnic_dev.c | 24 ++++++++++++++----------
+ drivers/net/enic/base/vnic_dev.h |  1 +
+ drivers/net/enic/enic_main.c     |  9 +++++++++
+ 3 files changed, 24 insertions(+), 10 deletions(-)
+
+diff --git a/dpdk-17.11/drivers/net/enic/base/vnic_dev.c b/dpdk-17.11/drivers/net/enic/base/vnic_dev.c
+index 05b595eb8..1f8d222fc 100644
+--- a/dpdk-17.11/drivers/net/enic/base/vnic_dev.c
++++ b/dpdk-17.11/drivers/net/enic/base/vnic_dev.c
+@@ -587,17 +587,9 @@ int vnic_dev_stats_dump(struct vnic_dev *vdev, struct vnic_stats **stats)
+ {
+ 	u64 a0, a1;
+ 	int wait = 1000;
+-	static u32 instance;
+-	char name[NAME_MAX];
+ 
+-	if (!vdev->stats) {
+-		snprintf((char *)name, sizeof(name),
+-			"vnic_stats-%u", instance++);
+-		vdev->stats = vdev->alloc_consistent(vdev->priv,
+-			sizeof(struct vnic_stats), &vdev->stats_pa, (u8 *)name);
+-		if (!vdev->stats)
+-			return -ENOMEM;
+-	}
++	if (!vdev->stats)
++		return -ENOMEM;
+ 
+ 	*stats = vdev->stats;
+ 	a0 = vdev->stats_pa;
+@@ -922,6 +914,18 @@ u32 vnic_dev_get_intr_coal_timer_max(struct vnic_dev *vdev)
+ 	return vdev->intr_coal_timer_info.max_usec;
+ }
+ 
++int vnic_dev_alloc_stats_mem(struct vnic_dev *vdev)
++{
++	char name[NAME_MAX];
++	static u32 instance;
++
++	snprintf((char *)name, sizeof(name), "vnic_stats-%u", instance++);
++	vdev->stats = vdev->alloc_consistent(vdev->priv,
++					     sizeof(struct vnic_stats),
++					     &vdev->stats_pa, (u8 *)name);
++	return vdev->stats == NULL ? -ENOMEM : 0;
++}
++
+ void vnic_dev_unregister(struct vnic_dev *vdev)
+ {
+ 	if (vdev) {
+diff --git a/dpdk-17.11/drivers/net/enic/base/vnic_dev.h b/dpdk-17.11/drivers/net/enic/base/vnic_dev.h
+index 8c0992063..7e5736b4d 100644
+--- a/dpdk-17.11/drivers/net/enic/base/vnic_dev.h
++++ b/dpdk-17.11/drivers/net/enic/base/vnic_dev.h
+@@ -165,6 +165,7 @@ struct vnic_dev *vnic_dev_register(struct vnic_dev *vdev,
+ 	void *priv, struct rte_pci_device *pdev, struct vnic_dev_bar *bar,
+ 	unsigned int num_bars);
+ struct rte_pci_device *vnic_dev_get_pdev(struct vnic_dev *vdev);
++int vnic_dev_alloc_stats_mem(struct vnic_dev *vdev);
+ int vnic_dev_cmd_init(struct vnic_dev *vdev, int fallback);
+ int vnic_dev_get_size(void);
+ int vnic_dev_int13(struct vnic_dev *vdev, u64 arg, u32 op);
+diff --git a/dpdk-17.11/drivers/net/enic/enic_main.c b/dpdk-17.11/drivers/net/enic/enic_main.c
+index c3796c543..235ef5940 100644
+--- a/dpdk-17.11/drivers/net/enic/enic_main.c
++++ b/dpdk-17.11/drivers/net/enic/enic_main.c
+@@ -1478,6 +1478,15 @@ int enic_probe(struct enic *enic)
+ 		enic_alloc_consistent,
+ 		enic_free_consistent);
+ 
++	/*
++	 * Allocate the consistent memory for stats upfront so both primary and
++	 * secondary processes can dump stats.
++	 */
++	err = vnic_dev_alloc_stats_mem(enic->vdev);
++	if (err) {
++		dev_err(enic, "Failed to allocate cmd memory, aborting\n");
++		goto err_out_unregister;
++	}
+ 	/* Issue device open to get device in known state */
+ 	err = enic_dev_open(enic);
+ 	if (err) {
+-- 
+2.14.3
+

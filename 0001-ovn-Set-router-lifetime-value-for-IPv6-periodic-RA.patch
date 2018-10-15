@@ -1,0 +1,55 @@
+From b8623e4cfee8350e66451cafe8f682fec0e02feb Mon Sep 17 00:00:00 2001
+From: Numan Siddique <nusiddiq@redhat.com>
+Date: Mon, 16 Apr 2018 19:26:53 +0530
+Subject: [PATCH] ovn: Set router lifetime value for IPv6 periodic RA.
+
+ovn-controller when it sends out periodic RA packets, sets '0' in the
+Router lifetime field. As per the RFC 4861,  lifetime of 0 indicates that
+the router is not a default router and SHOULD NOT appear on the default
+router list. Without the default route, a VM will not able to reach to
+other router ports attached to the same router unless a default route
+is added by the user.
+
+ovn-controller when encoding the 'put_nd_ra_opts' action sets the Router
+Lifetime field to 0xffff. So this patch also sets the same value when
+sending out the periodic RAs.
+
+Reported-at: https://bugzilla.redhat.com/show_bug.cgi?id=1567735
+Signed-off-by: Numan Siddique <nusiddiq@redhat.com>
+Signed-off-by: Ben Pfaff <blp@ovn.org>
+Acked-by: Mark Michelson <mmichels@redhat.com>
+---
+ ovn/controller/pinctrl.c | 3 ++-
+ tests/ovn.at             | 2 +-
+ 2 files changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/ovn/controller/pinctrl.c b/ovn/controller/pinctrl.c
+index 980f51fc9..daf485173 100644
+--- a/ovn/controller/pinctrl.c
++++ b/ovn/controller/pinctrl.c
+@@ -1269,7 +1269,8 @@ ipv6_ra_send(struct ipv6_ra_state *ra)
+     dp_packet_use_stub(&packet, packet_stub, sizeof packet_stub);
+     compose_nd_ra(&packet, ra->config->eth_src, ra->config->eth_dst,
+             &ra->config->ipv6_src, &ra->config->ipv6_dst,
+-            255, ra->config->mo_flags, 0, 0, 0, ra->config->mtu);
++            255, ra->config->mo_flags, htons(IPV6_ND_RA_LIFETIME), 0, 0,
++            ra->config->mtu);
+ 
+     for (int i = 0; i < ra->config->prefixes.n_ipv6_addrs; i++) {
+         ovs_be128 addr;
+diff --git a/tests/ovn.at b/tests/ovn.at
+index 8ba268668..816e39322 100644
+--- a/tests/ovn.at
++++ b/tests/ovn.at
+@@ -9280,7 +9280,7 @@ construct_expected_ra() {
+         shift 2
+     done
+ 
+-    local ra=ff${ra_mo}00000000000000000000${slla}${mtu_opt}${prefix}
++    local ra=ff${ra_mo}ffff0000000000000000${slla}${mtu_opt}${prefix}
+     local icmp=8600XXXX${ra}
+ 
+     local ip_len=$(expr ${#icmp} / 2)
+-- 
+2.14.3
+

@@ -1,0 +1,148 @@
+From 053e6774348c5a497a12b27d6120527c7af5e503 Mon Sep 17 00:00:00 2001
+From: Maxime Coquelin <maxime.coquelin@redhat.com>
+Date: Mon, 23 Apr 2018 11:33:41 +0200
+Subject: [PATCH 04/11] vhost: ensure all range is mapped when translating QVAs
+
+This patch ensures that all the address range is mapped when
+translating addresses from master's addresses (e.g. QEMU host
+addressess) to process VAs.
+
+This issue has been assigned CVE-2018-1059.
+
+Reported-by: Yongji Xie <xieyongji@baidu.com>
+Signed-off-by: Maxime Coquelin <maxime.coquelin@redhat.com>
+---
+ lib/librte_vhost/vhost_user.c | 58 +++++++++++++++++++++++++++----------------
+ 1 file changed, 36 insertions(+), 22 deletions(-)
+
+diff --git a/dpdk-17.11/lib/librte_vhost/vhost_user.c b/dpdk-17.11/lib/librte_vhost/vhost_user.c
+index 3acaacf..50e654d 100644
+--- a/dpdk-17.11/lib/librte_vhost/vhost_user.c
++++ b/dpdk-17.11/lib/librte_vhost/vhost_user.c
+@@ -330,19 +330,24 @@
+ /* Converts QEMU virtual address to Vhost virtual address. */
+ static uint64_t
+-qva_to_vva(struct virtio_net *dev, uint64_t qva)
++qva_to_vva(struct virtio_net *dev, uint64_t qva, uint64_t *len)
+ {
+-	struct rte_vhost_mem_region *reg;
++	struct rte_vhost_mem_region *r;
+ 	uint32_t i;
+ 
+ 	/* Find the region where the address lives. */
+ 	for (i = 0; i < dev->mem->nregions; i++) {
+-		reg = &dev->mem->regions[i];
++		r = &dev->mem->regions[i];
+ 
+-		if (qva >= reg->guest_user_addr &&
+-		    qva <  reg->guest_user_addr + reg->size) {
+-			return qva - reg->guest_user_addr +
+-			       reg->host_user_addr;
++		if (qva >= r->guest_user_addr &&
++		    qva <  r->guest_user_addr + r->size) {
++
++			if (unlikely(*len > r->guest_user_addr + r->size - qva))
++				*len = r->guest_user_addr + r->size - qva;
++
++			return qva - r->guest_user_addr +
++			       r->host_user_addr;
+ 		}
+ 	}
++	*len = 0;
+ 
+ 	return 0;
+@@ -357,5 +362,5 @@
+ static uint64_t
+ ring_addr_to_vva(struct virtio_net *dev, struct vhost_virtqueue *vq,
+-		uint64_t ra, uint64_t size)
++		uint64_t ra, uint64_t *size)
+ {
+ 	if (dev->features & (1ULL << VIRTIO_F_IOMMU_PLATFORM)) {
+@@ -363,5 +368,5 @@
+ 
+ 		vva = vhost_user_iotlb_cache_find(vq, ra,
+-					&size, VHOST_ACCESS_RW);
++					size, VHOST_ACCESS_RW);
+ 		if (!vva)
+ 			vhost_user_iotlb_miss(dev, ra, VHOST_ACCESS_RW);
+@@ -370,5 +375,5 @@
+ 	}
+ 
+-	return qva_to_vva(dev, ra);
++	return qva_to_vva(dev, ra, size);
+ }
+ 
+@@ -378,4 +383,5 @@
+ 	struct vhost_virtqueue *vq = dev->virtqueue[vq_index];
+ 	struct vhost_vring_addr *addr = &vq->ring_addrs;
++	uint64_t len;
+ 
+ 	/* The addresses are converted from QEMU virtual to Vhost virtual. */
+@@ -383,9 +389,10 @@
+ 		return dev;
+ 
++	len = sizeof(struct vring_desc) * vq->size;
+ 	vq->desc = (struct vring_desc *)(uintptr_t)ring_addr_to_vva(dev,
+-			vq, addr->desc_user_addr, sizeof(struct vring_desc));
+-	if (vq->desc == 0) {
++			vq, addr->desc_user_addr, &len);
++	if (vq->desc == 0 || len != sizeof(struct vring_desc) * vq->size) {
+ 		RTE_LOG(DEBUG, VHOST_CONFIG,
+-			"(%d) failed to find desc ring address.\n",
++			"(%d) failed to map desc ring.\n",
+ 			dev->vid);
+ 		return dev;
+@@ -396,18 +403,24 @@
+ 	addr = &vq->ring_addrs;
+ 
++	len = sizeof(struct vring_avail) + sizeof(uint16_t) * vq->size;
+ 	vq->avail = (struct vring_avail *)(uintptr_t)ring_addr_to_vva(dev,
+-			vq, addr->avail_user_addr, sizeof(struct vring_avail));
+-	if (vq->avail == 0) {
++			vq, addr->avail_user_addr, &len);
++	if (vq->avail == 0 ||
++			len != sizeof(struct vring_avail) +
++			sizeof(uint16_t) * vq->size) {
+ 		RTE_LOG(DEBUG, VHOST_CONFIG,
+-			"(%d) failed to find avail ring address.\n",
++			"(%d) failed to map avail ring.\n",
+ 			dev->vid);
+ 		return dev;
+ 	}
+ 
++	len = sizeof(struct vring_used) +
++		sizeof(struct vring_used_elem) * vq->size;
+ 	vq->used = (struct vring_used *)(uintptr_t)ring_addr_to_vva(dev,
+-			vq, addr->used_user_addr, sizeof(struct vring_used));
+-	if (vq->used == 0) {
++			vq, addr->used_user_addr, &len);
++	if (vq->used == 0 || len != sizeof(struct vring_used) +
++			sizeof(struct vring_used_elem) * vq->size) {
+ 		RTE_LOG(DEBUG, VHOST_CONFIG,
+-			"(%d) failed to find used ring address.\n",
++			"(%d) failed to map used ring.\n",
+ 			dev->vid);
+ 		return dev;
+@@ -1095,9 +1108,10 @@
+ 	struct vhost_iotlb_msg *imsg = &msg->payload.iotlb;
+ 	uint16_t i;
+-	uint64_t vva;
++	uint64_t vva, len;
+ 
+ 	switch (imsg->type) {
+ 	case VHOST_IOTLB_UPDATE:
+-		vva = qva_to_vva(dev, imsg->uaddr);
++		len = imsg->size;
++		vva = qva_to_vva(dev, imsg->uaddr, &len);
+ 		if (!vva)
+ 			return -1;
+@@ -1107,5 +1121,5 @@
+ 
+ 			vhost_user_iotlb_cache_insert(vq, imsg->iova, vva,
+-					imsg->size, imsg->perm);
++					len, imsg->perm);
+ 
+ 			if (is_vring_iotlb_update(vq, imsg))
+-- 
+1.8.3.1
+

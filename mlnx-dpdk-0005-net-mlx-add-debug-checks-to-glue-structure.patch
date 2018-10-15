@@ -1,0 +1,58 @@
+From bb12b6e32bafdba8836000d8515e5864f65f75be Mon Sep 17 00:00:00 2001
+From: Adrien Mazarguil <adrien.mazarguil@6wind.com>
+Date: Thu, 1 Feb 2018 14:30:57 +0100
+Subject: [PATCH 5/9] net/mlx: add debug checks to glue structure
+
+This code should catch mistakes early if a glue structure member is added
+without a corresponding implementation in the library.
+
+Signed-off-by: Adrien Mazarguil <adrien.mazarguil@6wind.com>
+(cherry picked from commit 1b176cec4973a410eaeff00f33c6d49b795aa867)
+---
+ drivers/net/mlx4/mlx4.c | 9 +++++++++
+ drivers/net/mlx5/mlx5.c | 9 +++++++++
+ 2 files changed, 18 insertions(+)
+
+diff --git a/dpdk-17.11/drivers/net/mlx4/mlx4.c b/dpdk-17.11/drivers/net/mlx4/mlx4.c
+index d12b00c..43d1b0a 100644
+--- a/dpdk-17.11/drivers/net/mlx4/mlx4.c
++++ b/dpdk-17.11/drivers/net/mlx4/mlx4.c
+@@ -764,6 +764,15 @@ struct mlx4_conf {
+ 		return;
+ 	assert(mlx4_glue);
+ #endif
++#ifndef NDEBUG
++	/* Glue structure must not contain any NULL pointers. */
++	{
++		unsigned int i;
++
++		for (i = 0; i != sizeof(*mlx4_glue) / sizeof(void *); ++i)
++			assert(((const void *const *)mlx4_glue)[i]);
++	}
++#endif
+ 	mlx4_glue->fork_init();
+ 	rte_pci_register(&mlx4_driver);
+ }
+diff --git a/dpdk-17.11/drivers/net/mlx5/mlx5.c b/dpdk-17.11/drivers/net/mlx5/mlx5.c
+index 71ebdce..6a3746d 100644
+--- a/dpdk-17.11/drivers/net/mlx5/mlx5.c
++++ b/dpdk-17.11/drivers/net/mlx5/mlx5.c
+@@ -1090,6 +1090,15 @@ struct mlx5_args {
+ 		return;
+ 	assert(mlx5_glue);
+ #endif
++#ifndef NDEBUG
++	/* Glue structure must not contain any NULL pointers. */
++	{
++		unsigned int i;
++
++		for (i = 0; i != sizeof(*mlx5_glue) / sizeof(void *); ++i)
++			assert(((const void *const *)mlx5_glue)[i]);
++	}
++#endif
+ 	mlx5_glue->fork_init();
+ 	rte_pci_register(&mlx5_driver);
+ }
+-- 
+1.8.3.1
+

@@ -1,0 +1,72 @@
+From 52bececea4d2327d842ee40e6c99388b6b3d8f93 Mon Sep 17 00:00:00 2001
+Message-Id: <52bececea4d2327d842ee40e6c99388b6b3d8f93.1524241750.git.dcaratti@redhat.com>
+In-Reply-To: <02bd8182658600ebf2cbe61168e80c19ce4cdaa5.1524241750.git.dcaratti@redhat.com>
+References: <02bd8182658600ebf2cbe61168e80c19ce4cdaa5.1524241750.git.dcaratti@redhat.com>
+From: Ajit Khaparde <ajit.khaparde@broadcom.com>
+Date: Fri, 20 Apr 2018 07:22:01 -0700
+Subject: [PATCH 2/3] net/bnxt: avoid invalid vnic id in set L2 Rx mask
+
+In some cases bnxt_hwrm_cfa_l2_set_rx_mask is being called before
+VNICs are allocated. The FW returns an error in such cases.
+Move bnxt_init_nic to bnxt_dev_init such that the ids are initialized
+to an invalid id.
+Prevent sending the command to the FW only with a valid vnic id.
+
+Fixes: 244bc98b0da7 ("net/bnxt: set L2 Rx mask")
+Cc: stable@dpdk.org
+
+Signed-off-by: Ajit Khaparde <ajit.khaparde@broadcom.com>
+---
+ drivers/net/bnxt/bnxt_ethdev.c | 7 ++-----
+ drivers/net/bnxt/bnxt_hwrm.c   | 3 +++
+ 2 files changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/dpdk-17.11/drivers/net/bnxt/bnxt_ethdev.c b/dpdk-17.11/drivers/net/bnxt/bnxt_ethdev.c
+index a133114a3..348129dad 100644
+--- a/dpdk-17.11/drivers/net/bnxt/bnxt_ethdev.c
++++ b/dpdk-17.11/drivers/net/bnxt/bnxt_ethdev.c
+@@ -395,10 +395,6 @@ static int bnxt_init_nic(struct bnxt *bp)
+ 	bnxt_init_vnics(bp);
+ 	bnxt_init_filters(bp);
+ 
+-	rc = bnxt_init_chip(bp);
+-	if (rc)
+-		return rc;
+-
+ 	return 0;
+ }
+ 
+@@ -594,7 +590,7 @@ static int bnxt_dev_start_op(struct rte_eth_dev *eth_dev)
+ 	}
+ 	bp->dev_stopped = 0;
+ 
+-	rc = bnxt_init_nic(bp);
++	rc = bnxt_init_chip(bp);
+ 	if (rc)
+ 		goto error;
+ 
+@@ -3398,6 +3394,7 @@ bnxt_dev_init(struct rte_eth_dev *eth_dev)
+ 		goto error_free_int;
+ 
+ 	bnxt_enable_int(bp);
++	bnxt_init_nic(bp);
+ 
+ 	return 0;
+ 
+diff --git a/dpdk-17.11/drivers/net/bnxt/bnxt_hwrm.c b/dpdk-17.11/drivers/net/bnxt/bnxt_hwrm.c
+index 11204bf42..bc8773509 100644
+--- a/dpdk-17.11/drivers/net/bnxt/bnxt_hwrm.c
++++ b/dpdk-17.11/drivers/net/bnxt/bnxt_hwrm.c
+@@ -221,6 +221,9 @@ int bnxt_hwrm_cfa_l2_set_rx_mask(struct bnxt *bp,
+ 	struct hwrm_cfa_l2_set_rx_mask_output *resp = bp->hwrm_cmd_resp_addr;
+ 	uint32_t mask = 0;
+ 
++	if (vnic->fw_vnic_id == INVALID_HW_RING_ID)
++		return rc;
++
+ 	HWRM_PREP(req, CFA_L2_SET_RX_MASK);
+ 	req.vnic_id = rte_cpu_to_le_16(vnic->fw_vnic_id);
+ 
+-- 
+2.14.3
+
