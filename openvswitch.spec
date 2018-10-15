@@ -45,7 +45,7 @@ URL: http://www.openvswitch.org/
 # Carried over from 2.6.1 CBS builds, introduced to win over 2.6.90
 Epoch:   1
 Version: 2.9.0
-Release: 56%{?commit0:.%{date}git%{shortcommit0}}%{?dist}
+Release: 56.rdo1%{?commit0:.%{date}git%{shortcommit0}}%{?dist}
 
 # Nearly all of openvswitch is ASL 2.0.  The bugtool is LGPLv2+, and the
 # lib/sflow*.[ch] files are SISSL
@@ -360,13 +360,15 @@ Open vSwitch provides standard network bridging functions and
 support for the OpenFlow protocol for remote per-flow control of
 traffic.
 
-%package -n python-openvswitch
+%package -n python2-openvswitch
 Summary: Open vSwitch python bindings
 License: ASL 2.0
 BuildArch: noarch
 Requires: python python-six
+Obsoletes: python-openvswitch < %{epoch}:2.7.2
+Provides: python-openvswitch = %{epoch}:%{version}-%{release}
 
-%description -n python-openvswitch
+%description -n python2-openvswitch
 Python bindings for the Open vSwitch database
 
 %package test
@@ -801,7 +803,7 @@ if systemctl is-active openvswitch >/dev/null 2>&1 ; then
 fi
 exit 0
 
-%files -n python-openvswitch
+%files -n python2-openvswitch
 %{python_sitelib}/ovs
 %doc COPYING
 
