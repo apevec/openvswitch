@@ -45,8 +45,8 @@ Summary: Open vSwitch daemon/database/utilities
 URL: http://www.openvswitch.org/
 # Carried over from 2.6.1 CBS builds, introduced to win over 2.6.90
 Epoch:   1
-Version: 2.9.2
-Release: 2%{?commit0:.%{date}git%{shortcommit0}}%{?dist}
+Version: 2.9.3
+Release: 1%{?commit0:.%{date}git%{shortcommit0}}%{?dist}
 
 # Nearly all of openvswitch is ASL 2.0.  The bugtool is LGPLv2+, and the
 # lib/sflow*.[ch] files are SISSL
@@ -70,12 +70,7 @@ ExclusiveArch: x86_64 aarch64 ppc64le s390x
 # ovs-patches
 
 # OVS (including OVN) backports (0 - 300)
-Patch0:  ovs-dev-ofproto-macros-Ignore-Dropped-log-messages-in-check_logs..patch
 Patch10: 0001-ofproto-dpif-Delete-system-tunnel-interface-when-rem.patch
-
-Patch41: 0002-netdev-tc-offloads-Add-support-for-IP-fragmentation.patch
-Patch42: 0001-lib-netdev-tc-offloads-Fix-frag-first-later-translat.patch
-Patch43: 0002-lib-tc-Fix-sparse-warnings.patch
 
 
 BuildRequires: gcc
@@ -645,6 +640,9 @@ chown -R openvswitch:openvswitch /etc/openvswitch
 %{_unitdir}/ovn-controller-vtep.service
 
 %changelog
+* Fri Nov 23 2018 Alan Pevec <alan.pevec@redhat.com> 1:2.9.3-1
+- Update to 2.9.3 CVE-2018-17204 CVE-2018-17205 CVE-2018-17206
+
 * Tue Jun 19 2018 Timothy Redaelli <tredaelli@redhat.com> - 2.9.2-1
 - Update to OVS 2.9.2
 - Backport a patch to make some tests pass on Fedora Rawhide
