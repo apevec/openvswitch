@@ -58,11 +58,16 @@
 %global with_python3 0
 %endif
 
+%if 0%{?centos} == 7
+# Carried over from 2.6.1 CBS builds, introduced to win over 2.6.90
+Epoch:   1
+%endif
+
 Name: openvswitch
 Summary: Open vSwitch daemon/database/utilities
 URL: http://www.openvswitch.org/
-Version: 2.10.0
-Release: 4%{?commit0:.%{date}git%{shortcommit0}}%{?dist}
+Version: 2.10.1
+Release: 1%{?commit0:.%{date}git%{shortcommit0}}%{?dist}
 
 # Nearly all of openvswitch is ASL 2.0.  The bugtool is LGPLv2+, and the
 # lib/sflow*.[ch] files are SISSL
@@ -81,25 +86,7 @@ Source: http://openvswitch.org/releases/%{name}-%{version}.tar.gz
 # ovs-patches
 
 # OVS (including OVN) backports (0 - 300)
-
-Patch010: ofproto-dpif-xlate_Fix_translation_of_groups_with_no_bu.patch
-
-Patch020: 0001-ovs-save-Don-t-always-include-the-default-flow-durin.patch
-
-# Bug 1631797
-Patch030: 0001-dpif-netdev-Add-round-robin-based-rxq-to-pmd-assignm.patch
-
-# Bug 1565205
-Patch040: 0001-dpif-netdev-Avoid-reordering-of-packets-in-a-batch-w.patch
-
-# Bug 1634015
-Patch050: 0001-dpif-netlink-don-t-allocate-per-thread-netlink-socke.patch
-Patch051: 0001-dpif-Remove-support-for-multiple-queues-per-port.patch
-
-# Bug 1635344
-Patch070: 0001-OVN-add-CT_LB-action-to-ovn-trace.patch
-
-Patch080: 0001-ovn.at-Skip-ACL-rate-limiting-test-on-slow-overloade.patch
+Patch10: 0001-ovn-nbctl-Fix-the-ovn-nbctl-test-LBs-daemon-which-fa.patch
 
 BuildRequires: gcc gcc-c++ make
 BuildRequires: autoconf automake libtool
@@ -134,6 +121,11 @@ BuildRequires: libcap-ng libcap-ng-devel
 %if %{with dpdk}
 %ifarch %{dpdkarches}
 BuildRequires: dpdk-devel libpcap-devel numactl-devel
+# Currently DPDK on Extras/AppStream includes the mlx{4,5} glue libraries, so
+# libibverbs is needed to run the tests (make check).
+%if 0%{?rhel}
+BuildRequires: libibverbs >= 15
+%endif
 %endif
 %endif
 
@@ -162,7 +154,11 @@ License: ASL 2.0
 Requires: %{_py2} %{_py2}-six
 %if "%{_py2}" == "python2"
 Obsoletes: python-openvswitch < 2.6.1-2
-Provides: python-openvswitch = %{version}-%{release}
+Provides: python-openvswitch = %{?epoch:%{epoch}:}%{version}-%{release}
+%endif
+%if 0%{?centos} == 7
+Obsoletes: python2-openvswitch
+Provides: python2-openvswitch = %{?epoch:%{epoch}:}%{version}-%{release}
 %endif
 
 %description -n %{_py2}-openvswitch
@@ -176,7 +172,7 @@ License: ASL 2.0
 Requires: python3 python3-six
 %if ! %{with_python2}
 Obsoletes: python-openvswitch < 2.10.0-6
-Provides: python-openvswitch = %{version}-%{release}
+Provides: python-openvswitch = %{?epoch:%{epoch}:}%{version}-%{release}
 %endif
 
 %description -n python3-openvswitch
@@ -188,10 +184,10 @@ Summary: Open vSwitch testing utilities
 License: ASL 2.0
 BuildArch: noarch
 %if %{with_python2}
-Requires: %{_py2}-openvswitch = %{version}-%{release}
+Requires: %{_py2}-openvswitch = %{?epoch:%{epoch}:}%{version}-%{release}
 Requires: %{_py2} %{_py2}-twisted%{?rhel:-web}
 %else
-Requires: python3-openvswitch = %{version}-%{release}
+Requires: python3-openvswitch = %{?epoch:%{epoch}:}%{version}-%{release}
 %endif
 
 %description test
@@ -698,7 +694,7 @@ chown -R openvswitch:openvswitch /etc/openvswitch
 %else
 %exclude %{_mandir}/man8/ovs-dpctl-top.8*
 %endif
-%if 0%{?rhel} && 0%{?rhel} <= 7
+%if (0%{?rhel} && 0%{?rhel} <= 7) || (0%{?fedora} && 0%{?fedora} < 29)
 %{_sysconfdir}/sysconfig/network-scripts/ifup-ovs
 %{_sysconfdir}/sysconfig/network-scripts/ifdown-ovs
 %endif
@@ -751,6 +747,9 @@ chown -R openvswitch:openvswitch /etc/openvswitch
 %{_unitdir}/ovn-controller-vtep.service
 
 %changelog
+* Wed Nov 28 2018 Timothy Redaelli <tredaelli@redhat.com> - 2.10.1-1
+- Rebase to 2.10.1
+
 * Wed Nov 21 2018 Timothy Redaelli <tredaelli@redhat.com> - 2.10.0-4
 - Fix C JSON library creation on Fedora Rawhide and exit if shared library cannot be created
 
