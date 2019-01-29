@@ -427,9 +427,6 @@ rm -f $RPM_BUILD_ROOT/%{_bindir}/ovn-docker-overlay-driver \
     fi
 %endif
 
-%clean
-rm -rf $RPM_BUILD_ROOT
-
 %preun
 %if 0%{?systemd_preun:1}
     %systemd_preun %{name}.service
