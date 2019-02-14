@@ -19,7 +19,7 @@
 %endif
 
 # To disable DPDK support, specify '--without dpdk' when building
-%bcond_without dpdk
+%bcond_with dpdk
 
 # test-suite is broken for big endians
 # https://bugzilla.redhat.com/show_bug.cgi?id=1105458#c10
@@ -67,7 +67,7 @@ Name: openvswitch
 Summary: Open vSwitch daemon/database/utilities
 URL: http://www.openvswitch.org/
 Version: 2.10.1
-Release: 2%{?commit0:.%{date}git%{shortcommit0}}%{?dist}
+Release: 3%{?commit0:.%{date}git%{shortcommit0}}%{?dist}
 
 # Nearly all of openvswitch is ASL 2.0.  The bugtool is LGPLv2+, and the
 # lib/sflow*.[ch] files are SISSL
@@ -744,6 +744,9 @@ chown -R openvswitch:openvswitch /etc/openvswitch
 %{_unitdir}/ovn-controller-vtep.service
 
 %changelog
+* Thu Feb 14 2019 Alfredo Moralejo <amoralej@redhat.com> - 2.10.1-3
+- Disabled dpdk support until a new release with support for dpdk-18.11 is created.
+
 * Fri Feb 01 2019 Fedora Release Engineering <releng@fedoraproject.org> - 2.10.1-2
 - Rebuilt for https://fedoraproject.org/wiki/Fedora_30_Mass_Rebuild
 
