@@ -19,7 +19,8 @@
 %endif
 
 # To disable DPDK support, specify '--without dpdk' when building
-%bcond_without dpdk
+# FIXME disabled due to incompatible DPDK 18.11 in Extras
+%bcond_with dpdk
 
 # test-suite is broken for big endians
 # https://bugzilla.redhat.com/show_bug.cgi?id=1105458#c10
@@ -47,7 +48,7 @@ URL: http://www.openvswitch.org/
 # Carried over from 2.6.1 CBS builds, introduced to win over 2.6.90
 Epoch:   1
 Version: 2.9.3
-Release: 1%{?commit0:.%{date}git%{shortcommit0}}%{?dist}
+Release: 2%{?commit0:.%{date}git%{shortcommit0}}%{?dist}
 
 # Nearly all of openvswitch is ASL 2.0.  The bugtool is LGPLv2+, and the
 # lib/sflow*.[ch] files are SISSL
@@ -641,6 +642,9 @@ chown -R openvswitch:openvswitch /etc/openvswitch
 %{_unitdir}/ovn-controller-vtep.service
 
 %changelog
+* Fri Feb 22 2019 Alan Pevec <alan.pevec@redhat.com> 1:2.9.3-2
+- Disabled dpdk support, dpdk-18.11 in Extras is not compatible with OVS 2.9
+
 * Fri Nov 23 2018 Alan Pevec <alan.pevec@redhat.com> 1:2.9.3-1
 - Update to 2.9.3 CVE-2018-17204 CVE-2018-17205 CVE-2018-17206
 
