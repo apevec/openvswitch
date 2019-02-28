@@ -66,8 +66,8 @@ Epoch:   1
 Name: openvswitch
 Summary: Open vSwitch daemon/database/utilities
 URL: http://www.openvswitch.org/
-Version: 2.10.1
-Release: 2%{?commit0:.%{date}git%{shortcommit0}}%{?dist}
+Version: 2.11.0
+Release: 1%{?commit0:.%{date}git%{shortcommit0}}%{?dist}
 
 # Nearly all of openvswitch is ASL 2.0.  The bugtool is LGPLv2+, and the
 # lib/sflow*.[ch] files are SISSL
@@ -86,7 +86,6 @@ Source: http://openvswitch.org/releases/%{name}-%{version}.tar.gz
 # ovs-patches
 
 # OVS (including OVN) backports (0 - 300)
-Patch10: 0001-ovn-nbctl-Fix-the-ovn-nbctl-test-LBs-daemon-which-fa.patch
 
 BuildRequires: gcc gcc-c++ make
 BuildRequires: autoconf automake libtool
@@ -214,6 +213,19 @@ This provides the ifup and ifdown scripts for use with the legacy network
 service.
 %endif
 
+%package ipsec
+Summary: Open vSwitch IPsec tunneling support
+License: ASL 2.0
+Requires: openvswitch libreswan
+%if %{with_python2}
+Requires: %{_py2}-openvswitch = %{?epoch:%{epoch}:}%{version}-%{release}
+%else
+Requires: python3-openvswitch = %{?epoch:%{epoch}:}%{version}-%{release}
+%endif
+
+%description ipsec
+This package provides IPsec tunneling support for OVS tunnels.
+
 %package ovn-central
 Summary: Open vSwitch - Open Virtual Network support
 License: ASL 2.0
@@ -317,6 +329,7 @@ install -p -D -m 0644 \
         $RPM_BUILD_ROOT/%{_sysconfdir}/sysconfig/openvswitch
 
 for service in openvswitch ovsdb-server ovs-vswitchd ovs-delete-transient-ports \
+                openvswitch-ipsec \
                 ovn-controller ovn-controller-vtep ovn-northd; do
         install -p -D -m 0644 \
                         rhel/usr_lib_systemd_system_${service}.service \
@@ -619,6 +632,10 @@ chown -R openvswitch:openvswitch /etc/openvswitch
 %{_sysconfdir}/sysconfig/network-scripts/ifdown-ovs
 %endif
 
+%files ipsec
+%{_datadir}/openvswitch/scripts/ovs-monitor-ipsec
+%{_unitdir}/openvswitch-ipsec.service
+
 %files
 %defattr(-,openvswitch,openvswitch)
 %dir %{_sysconfdir}/openvswitch
@@ -665,6 +682,7 @@ chown -R openvswitch:openvswitch /etc/openvswitch
 %{_mandir}/man5/vtep.5*
 %{_mandir}/man7/ovsdb-server.7*
 %{_mandir}/man7/ovsdb.7*
+%{_mandir}/man7/ovs-actions.7*
 %{_mandir}/man7/ovs-fields.7*
 %{_mandir}/man8/vtep-ctl.8*
 %{_mandir}/man8/ovs-appctl.8*
@@ -744,6 +762,9 @@ chown -R openvswitch:openvswitch /etc/openvswitch
 %{_unitdir}/ovn-controller-vtep.service
 
 %changelog
+* Thu Feb 28 2019 Timothy Redaelli <tredaelli@redhat.com> - 2.11.0-1
+- Rebase to 2.11.0
+
 * Fri Feb 01 2019 Fedora Release Engineering <releng@fedoraproject.org> - 2.10.1-2
 - Rebuilt for https://fedoraproject.org/wiki/Fedora_30_Mass_Rebuild
 
