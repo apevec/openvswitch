@@ -424,6 +424,8 @@ rm -f $RPM_BUILD_ROOT/%{_bindir}/ovn-docker-overlay-driver \
 
 %check
 %if %{with check}
+    touch resolv.conf
+    export OVS_RESOLV_CONF=$(pwd)/resolv.conf
     if make check TESTSUITEFLAGS='%{_smp_mflags}' ||
        make check TESTSUITEFLAGS='--recheck' ||
        make check TESTSUITEFLAGS='--recheck'; then :;
