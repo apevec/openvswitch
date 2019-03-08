@@ -67,7 +67,7 @@ Name: openvswitch
 Summary: Open vSwitch daemon/database/utilities
 URL: http://www.openvswitch.org/
 Version: 2.11.0
-Release: 1%{?commit0:.%{date}git%{shortcommit0}}%{?dist}
+Release: 2%{?commit0:.%{date}git%{shortcommit0}}%{?dist}
 
 # Nearly all of openvswitch is ASL 2.0.  The bugtool is LGPLv2+, and the
 # lib/sflow*.[ch] files are SISSL
@@ -766,6 +766,9 @@ chown -R openvswitch:openvswitch /etc/openvswitch
 %{_unitdir}/ovn-controller-vtep.service
 
 %changelog
+* Fri Mar 08 2019 Timothy Redaelli <tredaelli@redhat.com> - 2.11.0-2
+- Add libmnl-devel as build requirement for RHEL/CentOS.
+
 * Thu Feb 28 2019 Timothy Redaelli <tredaelli@redhat.com> - 2.11.0-1
 - Rebase to 2.11.0
 
