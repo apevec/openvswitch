@@ -122,8 +122,10 @@ BuildRequires: libcap-ng libcap-ng-devel
 BuildRequires: dpdk-devel libpcap-devel numactl-devel
 # Currently DPDK on Extras/AppStream includes the mlx{4,5} glue libraries, so
 # libibverbs is needed to run the tests (make check).
+# Starting from DPDK 18.11 also libmnl{,-devel} are needed
 %if 0%{?rhel}
 BuildRequires: libibverbs >= 15
+BuildRequires: libmnl-devel
 %endif
 %endif
 %endif
