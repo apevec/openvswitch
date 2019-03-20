@@ -18,9 +18,8 @@
 %define _rundir /run
 %endif
 
-# To enable DPDK support, specify '--with dpdk' when building
-# Disable dpdk as new release 18.11-3 is not compatible to openvswitch 2.11
-%bcond_with dpdk
+# To disable DPDK support, specify '--without dpdk' when building
+%bcond_without dpdk
 
 # test-suite is broken for big endians
 # https://bugzilla.redhat.com/show_bug.cgi?id=1105458#c10
@@ -68,7 +67,7 @@ Name: openvswitch
 Summary: Open vSwitch daemon/database/utilities
 URL: http://www.openvswitch.org/
 Version: 2.11.0
-Release: 3%{?commit0:.%{date}git%{shortcommit0}}%{?dist}
+Release: 4%{?commit0:.%{date}git%{shortcommit0}}%{?dist}
 
 # Nearly all of openvswitch is ASL 2.0.  The bugtool is LGPLv2+, and the
 # lib/sflow*.[ch] files are SISSL
@@ -767,6 +766,9 @@ chown -R openvswitch:openvswitch /etc/openvswitch
 %{_unitdir}/ovn-controller-vtep.service
 
 %changelog
+* Wed Mar 20 2019 Yatin Karel <ykarel@redhat.com> - 2.11.0-4
+- Revert:- Disable dpdk as new release 18.11-3 is not compatible to openvswitch 2.11
+
 * Wed Mar 20 2019 Yatin Karel <ykarel@redhat.com> - 2.11.0-3
 - Disable dpdk as new release 18.11-3 is not compatible to openvswitch 2.11
 
