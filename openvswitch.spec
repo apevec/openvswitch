@@ -34,8 +34,6 @@
 %bcond_with check_datapath_kernel
 # option to build with libcap-ng, needed for running OVS as regular user
 %bcond_without libcapng
-# option to build openvswitch-ovn-docker package
-%bcond_with ovn_docker
 
 # Build python2 (that provides python) and python3 subpackages on Fedora
 # Build only python3 (that provides python) subpackage on RHEL8
@@ -67,7 +65,7 @@ Name: openvswitch
 Summary: Open vSwitch daemon/database/utilities
 URL: http://www.openvswitch.org/
 Version: 2.11.0
-Release: 2%{?commit0:.%{date}git%{shortcommit0}}%{?dist}
+Release: 3%{?commit0:.%{date}git%{shortcommit0}}%{?dist}
 
 # Nearly all of openvswitch is ASL 2.0.  The bugtool is LGPLv2+, and the
 # lib/sflow*.[ch] files are SISSL
@@ -228,56 +226,6 @@ Requires: python3-openvswitch = %{?epoch:%{epoch}:}%{version}-%{release}
 %description ipsec
 This package provides IPsec tunneling support for OVS tunnels.
 
-%package ovn-central
-Summary: Open vSwitch - Open Virtual Network support
-License: ASL 2.0
-Requires: openvswitch openvswitch-ovn-common
-Requires: firewalld-filesystem
-
-%description ovn-central
-OVN, the Open Virtual Network, is a system to support virtual network
-abstraction.  OVN complements the existing capabilities of OVS to add
-native support for virtual network abstractions, such as virtual L2 and L3
-overlays and security groups.
-
-%package ovn-host
-Summary: Open vSwitch - Open Virtual Network support
-License: ASL 2.0
-Requires: openvswitch openvswitch-ovn-common
-Requires: firewalld-filesystem
-
-%description ovn-host
-OVN, the Open Virtual Network, is a system to support virtual network
-abstraction.  OVN complements the existing capabilities of OVS to add
-native support for virtual network abstractions, such as virtual L2 and L3
-overlays and security groups.
-
-%package ovn-vtep
-Summary: Open vSwitch - Open Virtual Network support
-License: ASL 2.0
-Requires: openvswitch openvswitch-ovn-common
-
-%description ovn-vtep
-OVN vtep controller
-
-%package ovn-common
-Summary: Open vSwitch - Open Virtual Network support
-License: ASL 2.0
-Requires: openvswitch
-
-%description ovn-common
-Utilities that are use to diagnose and manage the OVN components.
-
-%if %{with ovn_docker}
-%package ovn-docker
-Summary: Open vSwitch - Open Virtual Network support
-License: ASL 2.0
-Requires: openvswitch openvswitch-ovn-common python2-openvswitch
-
-%description ovn-docker
-Docker network plugins for OVN.
-%endif
-
 %prep
 %if 0%{?commit0:1}
 %autosetup -n ovs-%{commit0} -p 1
@@ -331,8 +279,7 @@ install -p -D -m 0644 \
         $RPM_BUILD_ROOT/%{_sysconfdir}/sysconfig/openvswitch
 
 for service in openvswitch ovsdb-server ovs-vswitchd ovs-delete-transient-ports \
-                openvswitch-ipsec \
-                ovn-controller ovn-controller-vtep ovn-northd; do
+               openvswitch-ipsec; do
         install -p -D -m 0644 \
                         rhel/usr_lib_systemd_system_${service}.service \
                         $RPM_BUILD_ROOT%{_unitdir}/${service}.service
@@ -393,14 +340,6 @@ rm -rf $RPM_BUILD_ROOT/%{_datadir}/openvswitch/python/
 install -d -m 0755 $RPM_BUILD_ROOT/%{_sharedstatedir}/openvswitch
 
 install -d -m 0755 $RPM_BUILD_ROOT%{_prefix}/lib/firewalld/services/
-install -p -m 0644 rhel/usr_lib_firewalld_services_ovn-central-firewall-service.xml \
-        $RPM_BUILD_ROOT%{_prefix}/lib/firewalld/services/ovn-central-firewall-service.xml
-install -p -m 0644 rhel/usr_lib_firewalld_services_ovn-host-firewall-service.xml \
-        $RPM_BUILD_ROOT%{_prefix}/lib/firewalld/services/ovn-host-firewall-service.xml
-
-install -d -m 0755 $RPM_BUILD_ROOT%{_prefix}/lib/ocf/resource.d/ovn
-ln -s %{_datadir}/openvswitch/scripts/ovndb-servers.ocf \
-      $RPM_BUILD_ROOT%{_prefix}/lib/ocf/resource.d/ovn/ovndb-servers
 
 install -p -D -m 0755 \
         rhel/usr_share_openvswitch_scripts_ovs-systemd-reload \
@@ -419,10 +358,15 @@ rm -f $RPM_BUILD_ROOT/%{_bindir}/ovs-benchmark \
         $RPM_BUILD_ROOT/%{_mandir}/man8/ovs-testcontroller.* \
         $RPM_BUILD_ROOT/%{_mandir}/man8/ovs-vlan-bug-workaround.8*
 
-%if %{without ovn_docker}
-rm -f $RPM_BUILD_ROOT/%{_bindir}/ovn-docker-overlay-driver \
-        $RPM_BUILD_ROOT/%{_bindir}/ovn-docker-underlay-driver
-%endif
+# remove ovn unpackages files
+rm -f $RPM_BUILD_ROOT%{_bindir}/ovn*
+rm -f $RPM_BUILD_ROOT%{_mandir}/man1/ovn*
+rm -f $RPM_BUILD_ROOT%{_mandir}/man5/ovn*
+rm -f $RPM_BUILD_ROOT%{_mandir}/man7/ovn*
+rm -f $RPM_BUILD_ROOT%{_mandir}/man8/ovn*
+rm -f $RPM_BUILD_ROOT%{_datadir}/openvswitch/ovn*
+rm -f $RPM_BUILD_ROOT%{_datadir}/openvswitch/scripts/ovn*
+rm -f $RPM_BUILD_ROOT%{_includedir}/ovn/*
 
 %check
 %if %{with check}
@@ -455,39 +399,6 @@ rm -f $RPM_BUILD_ROOT/%{_bindir}/ovn-docker-overlay-driver \
     fi
 %endif
 
-%preun ovn-central
-%if 0%{?systemd_preun:1}
-    %systemd_preun ovn-northd.service
-%else
-    if [ $1 -eq 0 ] ; then
-        # Package removal, not upgrade
-        /bin/systemctl --no-reload disable ovn-northd.service >/dev/null 2>&1 || :
-        /bin/systemctl stop ovn-northd.service >/dev/null 2>&1 || :
-    fi
-%endif
-
-%preun ovn-host
-%if 0%{?systemd_preun:1}
-    %systemd_preun ovn-controller.service
-%else
-    if [ $1 -eq 0 ] ; then
-        # Package removal, not upgrade
-        /bin/systemctl --no-reload disable ovn-controller.service >/dev/null 2>&1 || :
-        /bin/systemctl stop ovn-controller.service >/dev/null 2>&1 || :
-    fi
-%endif
-
-%preun ovn-vtep
-%if 0%{?systemd_preun:1}
-    %systemd_preun ovn-controller-vtep.service
-%else
-    if [ $1 -eq 0 ] ; then
-        # Package removal, not upgrade
-        /bin/systemctl --no-reload disable ovn-controller-vtep.service >/dev/null 2>&1 || :
-        /bin/systemctl stop ovn-controller-vtep.service >/dev/null 2>&1 || :
-    fi
-%endif
-
 %pre
 getent group openvswitch >/dev/null || groupadd -r openvswitch
 getent passwd openvswitch >/dev/null || \
@@ -513,68 +424,6 @@ chown -R openvswitch:openvswitch /etc/openvswitch
     # Package install, not upgrade
     if [ $1 -eq 1 ]; then
         /bin/systemctl daemon-reload >dev/null || :
-    fi
-%endif
-
-%post ovn-central
-%if 0%{?systemd_post:1}
-    %systemd_post ovn-northd.service
-%else
-    # Package install, not upgrade
-    if [ $1 -eq 1 ]; then
-        /bin/systemctl daemon-reload >dev/null || :
-    fi
-%endif
-
-%post ovn-host
-%if 0%{?systemd_post:1}
-    %systemd_post ovn-controller.service
-%else
-    # Package install, not upgrade
-    if [ $1 -eq 1 ]; then
-        /bin/systemctl daemon-reload >dev/null || :
-    fi
-%endif
-
-%post ovn-vtep
-%if 0%{?systemd_post:1}
-    %systemd_post ovn-controller-vtep.service
-%else
-    # Package install, not upgrade
-    if [ $1 -eq 1 ]; then
-        /bin/systemctl daemon-reload >dev/null || :
-    fi
-%endif
-%postun ovn-central
-%if 0%{?systemd_postun_with_restart:1}
-    %systemd_postun_with_restart ovn-northd.service
-%else
-    /bin/systemctl daemon-reload >/dev/null 2>&1 || :
-    if [ "$1" -ge "1" ] ; then
-    # Package upgrade, not uninstall
-        /bin/systemctl try-restart ovn-northd.service >/dev/null 2>&1 || :
-    fi
-%endif
-
-%postun ovn-host
-%if 0%{?systemd_postun_with_restart:1}
-    %systemd_postun_with_restart ovn-controller.service
-%else
-    /bin/systemctl daemon-reload >/dev/null 2>&1 || :
-    if [ "$1" -ge "1" ] ; then
-        # Package upgrade, not uninstall
-        /bin/systemctl try-restart ovn-controller.service >/dev/null 2>&1 || :
-    fi
-%endif
-
-%postun ovn-vtep
-%if 0%{?systemd_postun_with_restart:1}
-    %systemd_postun_with_restart ovn-controller-vtep.service
-%else
-    /bin/systemctl daemon-reload >/dev/null 2>&1 || :
-    if [ "$1" -ge "1" ] ; then
-        # Package upgrade, not uninstall
-        /bin/systemctl try-restart ovn-controller-vtep.service >/dev/null 2>&1 || :
     fi
 %endif
 
@@ -627,7 +476,6 @@ chown -R openvswitch:openvswitch /etc/openvswitch
 %{_libdir}/pkgconfig/*.pc
 %{_includedir}/openvswitch/*
 %{_includedir}/openflow/*
-%{_includedir}/ovn/*
 %exclude %{_libdir}/*.la
 
 %if 0%{?rhel} > 7 || 0%{?fedora} > 28
@@ -718,54 +566,10 @@ chown -R openvswitch:openvswitch /etc/openvswitch
 %{_sysconfdir}/sysconfig/network-scripts/ifdown-ovs
 %endif
 
-%if %{with ovn_docker}
-%files ovn-docker
-%{_bindir}/ovn-docker-overlay-driver
-%{_bindir}/ovn-docker-underlay-driver
-%endif
-
-%files ovn-common
-%{_bindir}/ovn-detrace
-%{_bindir}/ovn-nbctl
-%{_bindir}/ovn-sbctl
-%{_bindir}/ovn-trace
-%{_datadir}/openvswitch/scripts/ovn-ctl
-%{_datadir}/openvswitch/scripts/ovndb-servers.ocf
-%{_mandir}/man1/ovn-detrace.1*
-%{_mandir}/man8/ovn-ctl.8*
-%{_mandir}/man8/ovn-nbctl.8*
-%{_mandir}/man8/ovn-trace.8*
-%{_mandir}/man7/ovn-architecture.7*
-%{_mandir}/man8/ovn-sbctl.8*
-%{_mandir}/man5/ovn-nb.5*
-%{_mandir}/man5/ovn-sb.5*
-%{_prefix}/lib/ocf/resource.d/ovn/ovndb-servers
-%if %{with_python2}
-%{_datadir}/openvswitch/scripts/ovn-bugtool-nbctl-show
-%{_datadir}/openvswitch/scripts/ovn-bugtool-sbctl-lflow-list
-%{_datadir}/openvswitch/scripts/ovn-bugtool-sbctl-show
-%endif
-
-%files ovn-central
-%{_bindir}/ovn-northd
-%{_mandir}/man8/ovn-northd.8*
-%config %{_datadir}/openvswitch/ovn-nb.ovsschema
-%config %{_datadir}/openvswitch/ovn-sb.ovsschema
-%{_unitdir}/ovn-northd.service
-%{_prefix}/lib/firewalld/services/ovn-central-firewall-service.xml
-
-%files ovn-host
-%{_bindir}/ovn-controller
-%{_mandir}/man8/ovn-controller.8*
-%{_unitdir}/ovn-controller.service
-%{_prefix}/lib/firewalld/services/ovn-host-firewall-service.xml
-
-%files ovn-vtep
-%{_bindir}/ovn-controller-vtep
-%{_mandir}/man8/ovn-controller-vtep.8*
-%{_unitdir}/ovn-controller-vtep.service
-
 %changelog
+* Tue Apr 09 2019 Numan Siddique <numan.sididque@gmail.com> - 2.11.0-3
+- Remove openvswitch-ovn* subpackages.
+
 * Fri Mar 08 2019 Timothy Redaelli <tredaelli@redhat.com> - 2.11.0-2
 - Add libmnl-devel as build requirement for RHEL/CentOS.
 
