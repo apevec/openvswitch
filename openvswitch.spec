@@ -45,6 +45,8 @@
 %global with_python3 1
 %if 0%{?fedora}
 %global with_python2 1
+# Bug #1701921
+%global __requires_exclude ^python2\\.7dist\\(sortedcontainers\\)$
 %else
 %global with_python2 0
 %endif
@@ -64,8 +66,8 @@ Epoch:   1
 Name: openvswitch
 Summary: Open vSwitch daemon/database/utilities
 URL: http://www.openvswitch.org/
-Version: 2.11.0
-Release: 3%{?commit0:.%{date}git%{shortcommit0}}%{?dist}
+Version: 2.11.1
+Release: 1%{?commit0:.%{date}git%{shortcommit0}}%{?dist}
 
 # Nearly all of openvswitch is ASL 2.0.  The bugtool is LGPLv2+, and the
 # lib/sflow*.[ch] files are SISSL
@@ -567,6 +569,10 @@ chown -R openvswitch:openvswitch /etc/openvswitch
 %endif
 
 %changelog
+* Wed May 08 2019 Timothy Redaelli <tredaelli@redhat.com> - 2.11.1-1
+- Rebase to 2.11.1
+- Ignore sortedcontainer python2.7 dependency (#1701921)
+
 * Tue Apr 09 2019 Numan Siddique <numan.sididque@gmail.com> - 2.11.0-3
 - Remove openvswitch-ovn* subpackages.
 
