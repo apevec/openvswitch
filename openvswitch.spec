@@ -67,7 +67,7 @@ Name: openvswitch
 Summary: Open vSwitch daemon/database/utilities
 URL: http://www.openvswitch.org/
 Version: 2.11.1
-Release: 1%{?commit0:.%{date}git%{shortcommit0}}%{?dist}
+Release: 2%{?commit0:.%{date}git%{shortcommit0}}%{?dist}
 
 # Nearly all of openvswitch is ASL 2.0.  The bugtool is LGPLv2+, and the
 # lib/sflow*.[ch] files are SISSL
@@ -332,7 +332,7 @@ export CPPFLAGS="-I ../include"
 export LDFLAGS="%{__global_ldflags} -L $RPM_BUILD_ROOT%{_libdir}"
 %py3_build
 %py3_install
-[ -f "$RPM_BUILD_ROOT/%{python3_sitearch}/ovs/_json.cpython-%{python3_version_nodots}m-%{_arch}-%{_target_os}%{?_gnu}.so" ]
+[ -f "$RPM_BUILD_ROOT/%{python3_sitearch}/ovs/_json.cpython-%{python3_version_nodots}$(python3-config --abiflags)-%{_arch}-%{_target_os}%{?_gnu}.so" ]
 )
 %endif
 popd
@@ -569,6 +569,9 @@ chown -R openvswitch:openvswitch /etc/openvswitch
 %endif
 
 %changelog
+* Mon Jun 03 2019 Charalampos Stratakis <cstratak@redhat.com> - 2.11.1-2
+- Don't hard-code python's abi flags
+
 * Wed May 08 2019 Timothy Redaelli <tredaelli@redhat.com> - 2.11.1-1
 - Rebase to 2.11.1
 - Ignore sortedcontainer python2.7 dependency (#1701921)
