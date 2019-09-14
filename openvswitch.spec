@@ -35,15 +35,14 @@
 # option to build with libcap-ng, needed for running OVS as regular user
 %bcond_without libcapng
 
-# Build python2 (that provides python) and python3 subpackages on Fedora
-# Build only python3 (that provides python) subpackage on RHEL8
+# Build only python3 (that provides python) subpackage on RHEL8 and Fedora
 # Build only python subpackage on RHEL7
 %if 0%{?rhel} > 7 || 0%{?fedora}
 # Use Python3
 %global _py python3
 %global _py2 python2
 %global with_python3 1
-%if 0%{?fedora}
+%if 0%{?fedora} < 31
 %global with_python2 1
 # Bug #1701921
 %global __requires_exclude ^python2\\.7dist\\(sortedcontainers\\)$
@@ -66,8 +65,8 @@ Epoch:   1
 Name: openvswitch
 Summary: Open vSwitch daemon/database/utilities
 URL: http://www.openvswitch.org/
-Version: 2.11.1
-Release: 4%{?commit0:.%{date}git%{shortcommit0}}%{?dist}
+Version: 2.12.0
+Release: 1%{?commit0:.%{date}git%{shortcommit0}}%{?dist}
 
 # Nearly all of openvswitch is ASL 2.0.  The bugtool is LGPLv2+, and the
 # lib/sflow*.[ch] files are SISSL
@@ -86,6 +85,7 @@ Source: http://openvswitch.org/releases/%{name}-%{version}.tar.gz
 # ovs-patches
 
 # OVS (including OVN) backports (0 - 300)
+Patch001: python3-dict-change.patch
 
 BuildRequires: gcc gcc-c++ make
 BuildRequires: autoconf automake libtool
@@ -242,7 +242,9 @@ sed -i.old -e "s/^AC_INIT(openvswitch,.*,/AC_INIT(openvswitch, %{version},/" con
 %endif
 
 ./boot.sh
-
+%if ! %{with_python2}
+    export PYTHON2=no
+%endif
 %configure \
 %if %{with libcapng}
         --enable-libcapng \
@@ -569,6 +571,9 @@ chown -R openvswitch:openvswitch /etc/openvswitch
 %endif
 
 %changelog
+* Tue Sep 10 2019 Flavio Leitner <fbl@redhat.com> - 2.12.0-1
+- Updated to 2.12.0
+
 * Mon Aug 19 2019 Miro Hrončok <mhroncok@redhat.com> - 2.11.1-4
 - Rebuilt for Python 3.8
 
