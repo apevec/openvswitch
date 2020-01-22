@@ -42,7 +42,7 @@
 %global _py python3
 %global _py2 python2
 %global with_python3 1
-%if 0%{?fedora} < 31
+%if 0%{?fedora} < 31 && 0%{?fedora} != 0
 %global with_python2 1
 # Bug #1701921
 %global __requires_exclude ^python2\\.7dist\\(sortedcontainers\\)$
